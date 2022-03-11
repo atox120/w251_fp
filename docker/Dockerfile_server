@@ -15,7 +15,7 @@ RUN pip3 install opencv-python jupyter pkgconfig
 # Install decord from  and mmcv-full v1.4.0 (latest 1.4.6 does not play nice with VST repo)
 RUN pip3 install decord mmcv-full==1.4.0 PyTurboJPEG
 
-# Install Denseflow
+# Install Denseflow - optional package not yet working!
 #RUN git clone https://github.com/open-mmlab/denseflow.git \
 #    && cd denseflow && mkdir build && cd build \
 #    && cmake -DCMAKE_INSTALL_PREFIX=$HOME/app -DUSE_HDF5=no -DUSE_NVFLOW=no .. \

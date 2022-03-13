@@ -4,3 +4,5 @@ bsl_data/
 configs/*.pth
 *.zip
 notebooks/.ipynb_checkpoints/
+processed_videos/
+raw_videos/

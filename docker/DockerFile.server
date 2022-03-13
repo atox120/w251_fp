@@ -1,0 +1,21 @@
+FROM nvcr.io/nvidia/pytorch:22.02-py3
+WORKDIR /workspace
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install Dependencies
+RUN apt-get update && apt-get install -y apt-utils git ninja-build libglib2.0-0 libsm6 libxrender-dev libxext6 ffmpeg vim\
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Update pip and install some python dependencies
+RUN pip3 install --upgrade pip setuptools
+RUN pip3 install opencv-python jupyter pkgconfig
+
+# Install decord from  and mmcv-full v1.4.0 (latest 1.4.6 does not play nice with VST repo)
+RUN pip3 install decord mmcv-full==1.4.0 PyTurboJPEG
+RUN apt-get update && apt-get install -y pkg-config
+
+# Install some python packages
+RUN pip3 install jupyterlab -U && pip3 install wandb pytorch-lightning onnx webcolors timm einops
+
+CMD jupyter lab --ip=0.0.0.0 --allow-root

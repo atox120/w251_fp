@@ -1,0 +1,6 @@
+Video-Swin-Transformer/
+kinetics400_tiny/
+bsl_data/
+configs/*.pth
+*.zip
+notebooks/.ipynb_checkpoints/

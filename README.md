@@ -44,14 +44,14 @@ Use this URL in your browser:
         http://18.144.168.148:8888/lab?token=7210d7681f095c09f3820575ca7b0ef4595cfbd2343bef82
 ```
 ### Edge devices - untested. 
+
+***The instructions are for building on a Jetson device.***
 Run the script and commands below. 
 ```sh
 git clone https://github.com/atox120/w251_fp.git
 cd w251_fp
 bash edge_start.sh
 ```
-
-*The instructions are for building on a Jetson device. *
 
 ## Training and Inference
 ### Inference on tiny Kinetic400 data

@@ -34,7 +34,7 @@ cd ..
 cd ..
 
 # If the image does not exist, then build it
-docker image inspect swin:bsl > /dev/null || docker build --no-cache -t swin:bsl -f docker/DockerFile.server .
+docker image inspect swin:bsl > /dev/null || docker build --no-cache -t swin:bsl -f docker/DockerFile.edge .
 
 # Start the docker and capture the stdout
 oldout=$(docker run -d --gpus all --rm --net=host --ipc=host -v $PWD/store/:/workspace swin:bsl 2>&1 | xargs)

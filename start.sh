@@ -64,7 +64,7 @@ docker image inspect swin:bsl > /dev/null || docker build --no-cache -t swin:bsl
 
 # Start the docker and capture the stdout
 oldout=$(docker run -d --gpus all --rm --net=host --ipc=host -v $PWD/store/:/workspace swin:bsl 2>&1 | xargs)
-sleep 2
+sleep 4
 newout=$(docker logs "$oldout" 2>&1 | grep "    http://hostname:8888")
 
 # Print the command to display the jupyter notebook address

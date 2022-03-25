@@ -10,11 +10,14 @@ model=dict(backbone=dict(patch_size=(2,4,4), drop_path_rate=0.1), test_cfg=dict(
 # dataset settings
 dataset_type = 'VideoDataset'
 data_root = '../processed_videos'
-data_root_train = data_root + '/train'
+
 data_root_val = data_root + '/val'
-ann_file_train = data_root + '/bsl_train_video.txt'
+data_root_test = data_root + '/test'
+data_root_train = data_root + '/train'
+
 ann_file_val = data_root + '/bsl_val_video.txt'
-ann_file_test = ann_file_val
+ann_file_test = data_root + '/bsl_test_video.txt'
+ann_file_train = data_root + '/bsl_train_video.txt'
 
 img_norm_cfg = dict(
     mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_bgr=False)
@@ -89,7 +92,7 @@ data = dict(
     test=dict(
         type=dataset_type,
         ann_file=ann_file_test,
-        data_prefix=data_root_val,
+        data_prefix=data_root_test,
         pipeline=test_pipeline))
 evaluation = dict(
     interval=5, metrics=['top_k_accuracy', 'mean_class_accuracy'])
@@ -108,7 +111,7 @@ lr_config = dict(
     warmup_by_epoch=True,
     warmup_iters=2.5
 )
-total_epochs = 30
+total_epochs = 15
 
 # runtime settings
 checkpoint_config = dict(interval=1)

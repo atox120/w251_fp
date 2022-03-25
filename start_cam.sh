@@ -1,0 +1,2 @@
+# gst-launch-1.0 v4l2src ! nvvidconv ! 'video/x-raw(memory:NVMM),width=224,height=404,framerate=30/1' ! omxh265enc insert-vui=1 ! h265parse ! rtph265pay config-interval=1 ! udpsink host=127.0.0.1 port=5000 sync=false -e
+gst-launch-1.0 v4l2src ! nvvidconv ! 'video/x-raw(memory:NVMM),width=404,height=224,framerate=30/1' ! nvvidconv top=0 bottom=224 left=90 right=314 ! 'video/x-raw(memory:NVMM),width=224,height=224,framerate=30/1' ! omxh265enc insert-vui=1 ! h265parse ! rtph265pay config-interval=1 ! udpsink host=127.0.0.1 port=5000 sync=false -e

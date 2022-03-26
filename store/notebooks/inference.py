@@ -1,13 +1,24 @@
+import os
+import sys
 import cv2
 import numpy as np
 from threading import Thread
 from collections import deque
 
+sys.path.append(os.path.abspath(""))
+sys.path.append(os.path.abspath("../Video-Swin-Transformer"))
+os.chdir("../Video-Swin-Transformer")
+
 try:
     import torch
-    torch_available = True
 except ImportError:
-    torch_available = False
+    torch = None
+
+try:
+    from model_inference import get_model, single_gpu_predictor
+except ImportError:
+    get_model = None
+    single_gpu_predictor = None
 
 
 def normalize(frame):
@@ -23,7 +34,6 @@ def normalize(frame):
     return frame
 
 
-
 def interpret(index):
     text_form = ['all_done', 'water', 'poop', 'dad', 'mom']
 
@@ -32,7 +42,7 @@ def interpret(index):
 
 def capture_frames(cap, analyze_queue, display_queue):
     
-    while(True):
+    while True:
         # Capture the frame
         ret, frame = cap.read()
 
@@ -50,24 +60,33 @@ def capture_frames(cap, analyze_queue, display_queue):
         #  2. S -> Number of samples within one video
         #  3. C -> Image channels
         #  4. T -> Frames within video
-
-
-        new_frame = new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
+        new_frame = \
+            new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
         
         # Add the frames to queues 
         analyze_queue.append(new_frame)
         display_queue.append(frame)
     
 
-def analyze_frames(analyze_queue, display_queue, model=None):
+def infer_frames(analyze_queue, label_queue, model=None):
+    """
+    Takes the latest 32 frames and makes an inference on them. It then converts the inference to a text label
 
-    while(True):
+    Args:
+        analyze_queue: Queue of frames to analyze
+        label_queue: Saves the latest inference of labels
+        model: Model for inference
+
+    Returns:
+
+    """
+
+    while True:
         #  These are the frames to analyze and display at teh current moment
         analyze_frames = list(analyze_queue)
-        display_frames = list(display_queue)
         
         #  Check for non empty frames
-        analyze_frames  = [x for x in analyze_frames if isinstance(x, np.ndarray)]
+        analyze_frames = [x for x in analyze_frames if isinstance(x, np.ndarray)]
 
         # Display the resulting frame
         if len(analyze_frames) == 32:
@@ -75,55 +94,105 @@ def analyze_frames(analyze_queue, display_queue, model=None):
             to_tensor = np.concatenate(analyze_frames, axis=3)
             
             # Convert into the format the model is expecting
-            if torch_available:
+            if torch is not None:
+                # noinspection PyUnresolvedReferences
                 data_loader = [{"label": 0, "imgs": torch.from_numpy(to_tensor).to(torch.float32)}]
+            else:
+                data_loader = []
 
             # TODO - add inference here
             print('TODO- convert to tensor and inference, numpy array shape %s' % str(to_tensor.shape))
 
             # This operation should take about 130ms
-            # outputs = single_gpu_test(model, data_loader)
-            # predicted_class = [np.argamx(x) for x in outputs][0]
-            # action = interpret(predicted_class)
-            
+            if model is not None:
+                outputs = single_gpu_predictor(model, data_loader)
+                predicted_class = [np.argmax(x) for x in outputs][0]
+
+                # Predicted probablility
+                predicted_prob = outputs[predicted_class]
+                action = interpret(predicted_class)
+
+                # Add the probability of that action
+                action += ' prob: %.2f' % predicted_prob
+            else:
+                action = '..'
+
+            #
+            label_queue.append(action)
+
             print('TODO- Add text tag to frames and save the videos')
 
 
-def write_frames():
+def write_frames(mp4_out, label_queue):
+    """
+    Writes frames to MP$ files. Just works through the frame list and adds the appropriate labels
 
+    Args:
+        mp4_out: This is the CV2 mp4 writer
+        label_queue: This is the queue holding the latest labels
 
-while(True):
-    ret, frame = cap.read()
-    out.write(frame)
-    cv2.imshow('frame', frame)
-    c = cv2.waitKey(1)
-    if c & 0xFF == ord('q'):
-        break
+    Returns:
 
-    cap.release()
-    out.release()
-    cv2.destroyAllWindows()
+    """
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1
+    font_color = (255, 255, 255)
+    thickness = 1
+    line_type = 2
+
+    while True:
+        # Get the current label
+        action = label_queue[0]
+
+        if action:
+            # Annotate the frames with
+            for frame in label_queue.popleft():
+                # Add the annotation to the frame
+                frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
+                #
+                mp4_out.write(frame)
 
 
 def main():
+    """
 
-    # use gstreamer for video directly; set the fps
-    camSet= "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! nvv4l2decoder ! nvvidconv ! video/x-raw, format=I420 ! videoconvert ! video/x-raw, format=BGR ! appsink drop=1"
-    # camSet = "v4l2src device=/dev/video0 ! nvvidconv ! 'video/x-raw(memory:NVMM),width=404,height=224,framerate=32/1' ! nvvidconv top=0 bottom=224 left=90 right=314 ! 'video/x-raw(memory:NVMM),width=224,height=224,framerate=32/1' ! nvvidconv ! 'video/x-raw, format=I420' ! videoconvert ! 'video/x-raw, format=BGR' ! appsink drop=1"
+    Returns:
 
-    cap = cv2.VideoCapture(camSet, cv2.CAP_GSTREAMER)
+    """
+    # Setup the cofiguration and data file
+    config_file = '../configs/bsl_config.py'
+    input_video_path = './input_video.mp4'
+    check_point_file = './work_dirs/k400_swin_tiny_patch244_window877.py/best_top1_acc_epoch_10.pth'
+
+    # Capture from webcam or capture from file
+    do_webcam = True
+    if do_webcam:
+        # use gstreamer for video directly; set the fps
+        camset= "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! " \
+                "nvv4l2decoder ! nvvidconv ! video/x-raw, format=I420 ! videoconvert ! video/x-raw, format=BGR ! " \
+                "appsink drop=1"
+        cap = cv2.VideoCapture(camset, cv2.CAP_GSTREAMER)
+    else:
+        cap = cv2.VideoCapture(input_video_path)
+
+    #
+    if get_model is not None:
+        model = get_model(config_file, check_point_file, distributed=False)
+    else:
+        model = None
 
     # This defines the format for the write
     fourcc = cv2.VideoWriter_fourcc(*'MP4V')
-    out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (224, 224))
+    mp4_out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (224, 224))
 
     # Create two queues
     # 1. To hold the images as they are captured
-    # 2. Hold annotated images as they are labeled
+    # 3. Hold annotations of images
     # 2. To hold the images in the format that the anlysis requires
-    display_queue = deque([] *32, 32)
-    labeled_queue = deque([] *32, 32)
-    analyze_queue = deque([] *32, 32)
+    display_queue = deque([] * 32, 32)
+    label_queue = deque('' * 1, 1)
+    analyze_queue = deque([] * 32, 32)
 
     try:
         # Capture the frames as they come in
@@ -131,18 +200,21 @@ def main():
         capture.start()
         
         # Analyse and give them a label
-        analyze = Thread(target=analyze_frames, args=(analyze_queue, display_queue), daemon=True)
+        analyze = Thread(target=infer_frames, args=(analyze_queue, label_queue, model), daemon=True)
         analyze.start()
         
         # Write to file
-        write = Thread(target=write_frames, args=(out, labeled_queue), daemon=True)
+        write = Thread(target=write_frames, args=(mp4_out, label_queue), daemon=True)
         write.start()
 
+        # Join the threads
         capture.join()
+        analyze.join()
+        write.join()
     except KeyboardInterrupt:
         # When everything done, release the capture
         cap.release()
-        out.release()
+        mp4_out.release()
         cv2.destroyAllWindows()
 
 

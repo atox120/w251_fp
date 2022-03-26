@@ -47,11 +47,15 @@ def capture_frames(cap, analyze_queue, display_queue):
         ret, frame = cap.read()
 
         if frame is None:
-            print('None frame')
+            # print('None frame')
             continue
         else:
-            print('Capture frame')
+            pass
+            # print('Capture frame')
         
+        # print(f'Captured frame: {frame.shape}')
+        display_queue.append(frame)
+
         # Get a frame and normalize it
         new_frame = normalize(frame)
 
@@ -65,7 +69,6 @@ def capture_frames(cap, analyze_queue, display_queue):
         
         # Add the frames to queues 
         analyze_queue.append(new_frame)
-        display_queue.append(frame)
     
 
 def infer_frames(analyze_queue, label_queue, model=None):
@@ -123,7 +126,7 @@ def infer_frames(analyze_queue, label_queue, model=None):
             print('TODO- Add text tag to frames and save the videos')
 
 
-def write_frames(mp4_out, label_queue):
+def write_frames(mp4_out, display_queue, label_queue):
     """
     Writes frames to MP$ files. Just works through the frame list and adds the appropriate labels
 
@@ -146,11 +149,19 @@ def write_frames(mp4_out, label_queue):
         action = label_queue[0]
 
         if action:
-            # Annotate the frames with
-            for frame in label_queue.popleft():
+            while display_queue:
+                # print(action)
+                # Annotate the frames with
+                frame = display_queue.popleft()
+
                 # Add the annotation to the frame
-                frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
-                #
+                if get_model is not None:
+                    frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
+                
+                # Display the frame
+                # cv2.imshow('video', frame)
+
+                # Witing the frame to mp4 with annotation
                 mp4_out.write(frame)
 
 
@@ -162,7 +173,7 @@ def main():
     """
     # Setup the cofiguration and data file
     config_file = '../configs/bsl_config.py'
-    input_video_path = './input_video.mp4'
+    input_video_path = 'source_video.mp4'
     check_point_file = './work_dirs/k400_swin_tiny_patch244_window877.py/best_top1_acc_epoch_10.pth'
 
     # Capture from webcam or capture from file
@@ -183,15 +194,20 @@ def main():
         model = None
 
     # This defines the format for the write
-    fourcc = cv2.VideoWriter_fourcc(*'MP4V')
-    mp4_out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (224, 224))
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    if model is None:
+        mp4_out = cv2.VideoWriter('../notebooks/source_video.mp4', fourcc, 20, (224, 224))
+    else:
+        mp4_out = cv2.VideoWriter('../notebooks/interpreted.mp4', fourcc, 20, (224, 224))
+    # fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    # mp4_out = cv2.VideoWriter('output.avi', fourcc, 20, (224, 224))
 
     # Create two queues
     # 1. To hold the images as they are captured
     # 3. Hold annotations of images
     # 2. To hold the images in the format that the anlysis requires
     display_queue = deque([] * 32, 32)
-    label_queue = deque('' * 1, 1)
+    label_queue = deque([''], 1)
     analyze_queue = deque([] * 32, 32)
 
     try:
@@ -204,7 +220,7 @@ def main():
         analyze.start()
         
         # Write to file
-        write = Thread(target=write_frames, args=(mp4_out, label_queue), daemon=True)
+        write = Thread(target=write_frames, args=(mp4_out, display_queue, label_queue), daemon=True)
         write.start()
 
         # Join the threads
@@ -212,6 +228,7 @@ def main():
         analyze.join()
         write.join()
     except KeyboardInterrupt:
+        print('Releasing all')
         # When everything done, release the capture
         cap.release()
         mp4_out.release()

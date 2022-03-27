@@ -173,14 +173,16 @@ def write_frames(mp4_out, display_queue, label_queue):
                 # Label the 32 frames associated with the action
                 if frame_count <= action_frame - 16:
                     # print(f'fc {frame_count} < {action_frame - 16}')
-                    frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
+                    if get_model is not None:
+                        frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
                     mp4_out.write(frame)
                     print(f'Writing frame count {frame_count} action !')
                 else:
                     # print(f'fc {frame_count} > {action_frame - 16} < ')
-                    frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
+                    if get_model is not None:
+                        frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
                     mp4_out.write(frame)
@@ -205,7 +207,7 @@ def main():
     check_point_file = './work_dirs/k400_swin_tiny_patch244_window877.py/best_top1_acc_epoch_10.pth'
 
     # Capture from webcam or capture from file
-    do_webcam = False
+    do_webcam = True
     if do_webcam:
         # use gstreamer for video directly; set the fps
         camset= "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! " \

@@ -42,6 +42,7 @@ def interpret(index):
 
 def capture_frames(cap, analyze_queue, display_queue):
     
+    count = 0
     while True:
         # Capture the frame
         ret, frame = cap.read()
@@ -54,21 +55,25 @@ def capture_frames(cap, analyze_queue, display_queue):
             # print('Capture frame')
         
         # print(f'Captured frame: {frame.shape}')
-        display_queue.append(frame)
-
-        # Get a frame and normalize it
-        new_frame = normalize(frame)
-
-        # Accumulate frames and make them 6 dimensional (N, S, C, T, W, H)
-        #  1. N -> Number of inference videos
-        #  2. S -> Number of samples within one video
-        #  3. C -> Image channels
-        #  4. T -> Frames within video
-        new_frame = \
-            new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
+        display_queue.append((frame, count))
         
-        # Add the frames to queues 
-        analyze_queue.append(new_frame)
+        # Capture onyl odd frames
+        if count % 2 == 1:
+            # Get a frame and normalize it
+            new_frame = normalize(frame)
+
+            # Accumulate frames and make them 6 dimensional (N, S, C, T, W, H)
+            #  1. N -> Number of inference videos
+            #  2. S -> Number of samples within one video
+            #  3. C -> Image channels
+            #  4. T -> Frames within video
+            new_frame = \
+                new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
+
+            # Add the frames to queues 
+            analyze_queue.append((new_frame, count))
+        
+        count += 1
     
 
 def infer_frames(analyze_queue, label_queue, model=None):
@@ -87,13 +92,16 @@ def infer_frames(analyze_queue, label_queue, model=None):
     while True:
         #  These are the frames to analyze and display at teh current moment
         analyze_frames = list(analyze_queue)
-        
-        #  Check for non empty frames
-        analyze_frames = [x for x in analyze_frames if isinstance(x, np.ndarray)]
 
         # Display the resulting frame
         if len(analyze_frames) == 32:
-            #  Accumulate into the inference numpy array
+            
+            # This is the frame count where the label should switch
+            frame_counts = [x[1] for x in analyze_frames]
+            frame_count = int(np.mean(frame_counts))
+            analyze_frames = [x[0] for x in analyze_frames]
+            
+            # Accumulate into the inference numpy array
             to_tensor = np.concatenate(analyze_frames, axis=3)
             
             # Convert into the format the model is expecting
@@ -103,27 +111,26 @@ def infer_frames(analyze_queue, label_queue, model=None):
             else:
                 data_loader = []
 
-            # TODO - add inference here
-            print('TODO- convert to tensor and inference, numpy array shape %s' % str(to_tensor.shape))
-
             # This operation should take about 130ms
             if model is not None:
                 outputs = single_gpu_predictor(model, data_loader)
                 predicted_class = [np.argmax(x) for x in outputs][0]
 
                 # Predicted probablility
-                predicted_prob = outputs[predicted_class]
+                predicted_prob = outputs[0][predicted_class]
                 action = interpret(predicted_class)
-
-                # Add the probability of that action
-                action += ' prob: %.2f' % predicted_prob
+                
+                if predicted_prob < 0.1:
+                    action = '..'
+                else:
+                    # Add the probability of that action
+                    action += ' prob: %.2f' % predicted_prob
             else:
                 action = '..'
 
-            #
-            label_queue.append(action)
-
-            print('TODO- Add text tag to frames and save the videos')
+            # 
+            label_queue.append((action, frame_count))
+            print(f'Inference {action} on frame count {frame_count}')
 
 
 def write_frames(mp4_out, display_queue, label_queue):
@@ -139,30 +146,51 @@ def write_frames(mp4_out, display_queue, label_queue):
     """
 
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 1
+    font_scale = 0.4
     font_color = (255, 255, 255)
     thickness = 1
     line_type = 2
-
+    
+    action_frame = None
+    action = '..'
     while True:
-        # Get the current label
-        action = label_queue[0]
+        try:
+            # It has both action and label
+            action, action_frame = label_queue.popleft()
+            print(f'Action {action} on frame {action_frame}')
+        except IndexError:
+            pass
 
-        if action:
-            while display_queue:
-                # print(action)
-                # Annotate the frames with
-                frame = display_queue.popleft()
+        # Name all labels upto the action frame as previous label
+        if display_queue and action_frame is not None:
+            # Get the first frame count
+            frame, frame_count = display_queue[0]
+            
+            while frame_count < action_frame + 16:
+                # Did not interpret these frames
+                frame, frame_count = display_queue.popleft()
+                    
+                # Label the 32 frames associated with the action
+                if frame_count <= action_frame - 16:
+                    # print(f'fc {frame_count} < {action_frame - 16}')
+                    frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
 
-                # Add the annotation to the frame
-                if get_model is not None:
+                    # Writing the frame to mp4 with annotation
+                    mp4_out.write(frame)
+                    print(f'Writing frame count {frame_count} action !')
+                else:
+                    # print(f'fc {frame_count} > {action_frame - 16} < ')
                     frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
-                
-                # Display the frame
-                # cv2.imshow('video', frame)
 
-                # Witing the frame to mp4 with annotation
-                mp4_out.write(frame)
+                    # Writing the frame to mp4 with annotation
+                    mp4_out.write(frame)
+                    print(f'Writing frame count {frame_count} action {action}')
+                
+                # Get the first frame count
+                if display_queue:
+                    frame, frame_count = display_queue[0]
+                else:
+                    break
 
 
 def main():
@@ -173,11 +201,11 @@ def main():
     """
     # Setup the cofiguration and data file
     config_file = '../configs/bsl_config.py'
-    input_video_path = 'source_video.mp4'
+    input_video_path = '../notebooks/source_video.mp4'
     check_point_file = './work_dirs/k400_swin_tiny_patch244_window877.py/best_top1_acc_epoch_10.pth'
 
     # Capture from webcam or capture from file
-    do_webcam = True
+    do_webcam = False
     if do_webcam:
         # use gstreamer for video directly; set the fps
         camset= "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! " \
@@ -206,9 +234,9 @@ def main():
     # 1. To hold the images as they are captured
     # 3. Hold annotations of images
     # 2. To hold the images in the format that the anlysis requires
-    display_queue = deque([] * 32, 32)
-    label_queue = deque([''], 1)
-    analyze_queue = deque([] * 32, 32)
+    display_queue = deque([], 300)
+    label_queue = deque([], 32)
+    analyze_queue = deque([], 32)
 
     try:
         # Capture the frames as they come in

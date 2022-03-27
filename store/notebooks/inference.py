@@ -1,6 +1,7 @@
 import os
 import sys
 import cv2
+import time
 import numpy as np
 from threading import Thread
 from collections import deque
@@ -43,36 +44,42 @@ def interpret(index):
 def capture_frames(cap, analyze_queue, display_queue):
     
     count = 0
-    while True:
+    delay_time = 0
+    time_accum = deque([], 30)
+    while cap.isOpened():
         # Capture the frame
         ret, frame = cap.read()
+        
+        start = time.perf_counter()
 
         if frame is None:
             # print('None frame')
             continue
         else:
-            pass
-            # print('Capture frame')
-        
+            time.sleep(delay_time)
+           
         # print(f'Captured frame: {frame.shape}')
         display_queue.append((frame, count))
-        
-        # Capture onyl odd frames
-        if count % 2 == 1:
-            # Get a frame and normalize it
-            new_frame = normalize(frame)
 
-            # Accumulate frames and make them 6 dimensional (N, S, C, T, W, H)
-            #  1. N -> Number of inference videos
-            #  2. S -> Number of samples within one video
-            #  3. C -> Image channels
-            #  4. T -> Frames within video
-            new_frame = \
-                new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
+        # Get a frame and normalize it
+        new_frame = normalize(frame)
 
-            # Add the frames to queues 
-            analyze_queue.append((new_frame, count))
+        # Accumulate frames and make them 6 dimensional (N, S, C, T, W, H)
+        #  1. N -> Number of inference videos
+        #  2. S -> Number of samples within one video
+        #  3. C -> Image channels
+        #  4. T -> Frames within video
+        new_frame = \
+            new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
+
+        # Add the frames to queues 
+        analyze_queue.append((new_frame, count))
         
+        time_accum.append(time.perf_counter() - start)
+        
+        # 30 frames per second is 0.033s/frame
+        delay_time = 0.033 - np.mean(time_accum)
+        delay_time = 0 if delay_time < 0 else delay_time
         count += 1
     
 
@@ -88,7 +95,8 @@ def infer_frames(analyze_queue, label_queue, model=None):
     Returns:
 
     """
-
+    
+    inferences = 0
     while True:
         #  These are the frames to analyze and display at teh current moment
         analyze_frames = list(analyze_queue)
@@ -121,16 +129,18 @@ def infer_frames(analyze_queue, label_queue, model=None):
                 action = interpret(predicted_class)
                 
                 if predicted_prob < 0.1:
-                    action = '..'
-                else:
-                    # Add the probability of that action
-                    action += ' prob: %.2f' % predicted_prob
+                    action = '..'  
+
+                # Add the probability of that action and inference number
+                action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
             else:
                 action = '..'
 
             # 
             label_queue.append((action, frame_count))
-            print(f'Inference {action} on frame count {frame_count}')
+            print(f'Inference {action} on frame count {frame_count} inference count {inferences}')
+            
+            inferences += 1
 
 
 def write_frames(mp4_out, display_queue, label_queue):
@@ -172,21 +182,19 @@ def write_frames(mp4_out, display_queue, label_queue):
                     
                 # Label the 32 frames associated with the action
                 if frame_count <= action_frame - 16:
-                    # print(f'fc {frame_count} < {action_frame - 16}')
                     if get_model is not None:
                         frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
                     mp4_out.write(frame)
-                    print(f'Writing frame count {frame_count} action !')
+                    # print(f'Writing frame count {frame_count} action !')
                 else:
-                    # print(f'fc {frame_count} > {action_frame - 16} < ')
                     if get_model is not None:
                         frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
                     mp4_out.write(frame)
-                    print(f'Writing frame count {frame_count} action {action}')
+                    # print(f'Writing frame count {frame_count} action {action}')
                 
                 # Get the first frame count
                 if display_queue:
@@ -207,7 +215,7 @@ def main():
     check_point_file = './work_dirs/k400_swin_tiny_patch244_window877.py/best_top1_acc_epoch_10.pth'
 
     # Capture from webcam or capture from file
-    do_webcam = True
+    do_webcam = False
     if do_webcam:
         # use gstreamer for video directly; set the fps
         camset= "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! " \
@@ -236,8 +244,8 @@ def main():
     # 1. To hold the images as they are captured
     # 3. Hold annotations of images
     # 2. To hold the images in the format that the anlysis requires
-    display_queue = deque([], 300)
-    label_queue = deque([], 32)
+    display_queue = deque([], 1500)
+    label_queue = deque([], 300)
     analyze_queue = deque([], 32)
 
     try:
@@ -250,14 +258,21 @@ def main():
         analyze.start()
         
         # Write to file
-        write = Thread(target=write_frames, args=(mp4_out, display_queue, label_queue), daemon=True)
-        write.start()
+        # write = Thread(target=write_frames, args=(mp4_out, display_queue, label_queue), daemon=True)
+        # write.start()
 
         # Join the threads
         capture.join()
         analyze.join()
-        write.join()
+        # write.join()
     except KeyboardInterrupt:
+        # 
+        cap.release()
+        
+        # Writing everything 
+        print('Writing to inference')
+        write_frames(mp4_out, display_queue, label_queue)
+        
         print('Releasing all')
         # When everything done, release the capture
         cap.release()

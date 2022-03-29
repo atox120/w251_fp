@@ -209,10 +209,14 @@ def main():
     Returns:
 
     """
+    device = 'cuda:0'
     # Setup the cofiguration and data file
     config_file = '../configs/bsl_config.py'
     input_video_path = '../notebooks/source_video.mp4'
     check_point_file = './configs/best_model.pth'
+
+    # noinspection PyUnresolvedReferences
+    torch.cuda.set_device(0)
 
     # Capture from webcam or capture from file
     do_webcam = False
@@ -227,7 +231,7 @@ def main():
 
     #
     if get_model is not None:
-        model = get_model(config_file, check_point_file, distributed=False)
+        model = get_model(config_file, check_point_file, device=device)
     else:
         model = None
 

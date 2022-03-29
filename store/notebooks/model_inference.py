@@ -54,7 +54,7 @@ def turn_off_pretrained(cfg):
             turn_off_pretrained(sub_cfg)
             
             
-def get_model(config_file, check_point_file, distributed = False):
+def get_model(config_file, check_point_file, device='cuda:0'):
     # Create the configuration from the file 
     # Customization for training the BSL data set
     cfg = Config.fromfile(config_file)
@@ -76,7 +76,8 @@ def get_model(config_file, check_point_file, distributed = False):
     fp16_cfg = cfg.get('fp16', None)
     if fp16_cfg is not None:
         wrap_fp16_model(model)
-    load_checkpoint(model, check_point_file, map_location='cpu')
+
+    load_checkpoint(model, check_point_file, map_location=device)
 
     model = MMDataParallel(model, device_ids=[0])
     

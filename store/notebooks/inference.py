@@ -212,7 +212,7 @@ def main():
     # Setup the cofiguration and data file
     config_file = '../configs/bsl_config.py'
     input_video_path = '../notebooks/source_video.mp4'
-    check_point_file = './work_dirs/k400_swin_tiny_patch244_window877.py/best_top1_acc_epoch_10.pth'
+    check_point_file = './configs/best_model.pth'
 
     # Capture from webcam or capture from file
     do_webcam = False

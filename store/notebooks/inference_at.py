@@ -99,8 +99,12 @@ def capture_frames(barrier, cap, analyze_queue, display_queue):
         delay_time = 0 if delay_time < 0 else delay_time
         count += 1
 
-        if count % 10 == 0:
-            time.sleep(1/30)
+        if count == 32:
+            print('Pausing for first inference')
+            time.sleep(60)
+
+        if count % 32 == 0:
+            time.sleep(1.0/1000)
     
     # No more frames being capture, done with input
     print('Completed frame loading')
@@ -123,6 +127,8 @@ def infer_frames(barrier, analyze_queue, label_queue, model=None):
     print('infer_frames ready')
     barrier.wait()
     print('Infer thread started')
+
+    previous_frame_count = -1
     
     inferences = 0
     while True:
@@ -149,9 +155,11 @@ def infer_frames(barrier, analyze_queue, label_queue, model=None):
                 data_loader = [{"label": 0, "imgs": torch.from_numpy(to_tensor).to(torch.float32)}]
             else:
                 data_loader = []
+            
+            do_infer = False if previous_frame_count == frame_count else True
 
             # This operation should take about 130ms
-            if model is not None:
+            if model is not None and do_infer:
                 outputs = single_gpu_predictor(model, data_loader)
                 predicted_class = [np.argmax(x) for x in outputs][0]
 
@@ -168,11 +176,16 @@ def infer_frames(barrier, analyze_queue, label_queue, model=None):
             else:
                 print('doing nothing')
                 action = '..'
-
-            # 
-            label_queue.append((action, frame_count))
-            print(f'Inference {action} on frame count {frame_count} inference count {inferences}')
-            inferences += 1
+           
+            if do_infer:
+                # 
+                label_queue.append((action, frame_count))
+                print(f'Inference {action} on frame count {frame_count} inference count {inferences}')
+                inferences += 1
+                time.sleep(1.0/1000)
+            
+            #  
+            previous_frame_count = frame_count
         
         if barrier.broken:
             print('Broken barrier')
@@ -243,7 +256,7 @@ def display_frames(barrier, display_queue, label_queue):
             break
 
 
-def write_frames(m4_out, display_queue, label_queue):
+def write_frames(mp4_out, display_queue, label_queue):
     """
     Writes frames to mp4 files. Just works through the frame list and adds the appropriate labels
 
@@ -317,7 +330,7 @@ def main():
     input_video_path = '../notebooks/source_video.mp4'
     check_point_file = '../configs/best_model.pth'
     do_webcam = False  # Is the video source a webcam or a video file?
-    write_to_video = True  # Write output to video or not?
+    write_to_video = False  # Write output to video or not?
     display_video = False  # Write output to video or not?
     
     # Check whether webcam is enabled

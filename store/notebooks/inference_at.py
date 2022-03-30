@@ -2,6 +2,7 @@ import os
 import sys
 import cv2
 import time
+import warnings
 import numpy as np
 from threading import Thread
 from collections import deque
@@ -16,19 +17,18 @@ try:
     import torch
 except ImportError:
     torch = None
-    print('WARNING: Torch not loaded!')
+    warnings.warn('Torch package was not found and hence not loaded. Inference taks cannot be performed')
 
 
 try:
     from model_inference import get_model, single_gpu_predictor
 except ImportError:
-    print('WARNING! Failed to load inference libraries!')
+    warnings.warn('Failed to load inference libraries. Inference tasks cannot be performed')
     get_model = None
     single_gpu_predictor = None
 
-print('...done!')
 
-def normalize(frame):
+def normalize(frame): 
     mean = np.reshape([123.675, 116.28, 103.53], (1, 1, 3)) 
     std = np.reshape([58.395, 57.12, 57.375], (1, 1, 3))
     
@@ -47,8 +47,8 @@ def interpret(index):
     return text_form[index]
 
 
-def capture_frames(cap, analyze_queue, display_queue):
-    
+def capture_frames(analyze_queue, display_queue, do_webcam, input_video_path=''):
+
     count = 0
     delay_time = 0
     time_accum = deque([], 30)
@@ -59,9 +59,10 @@ def capture_frames(cap, analyze_queue, display_queue):
         start = time.perf_counter()
 
         if frame is None:
-            # print('None frame')
+            print('None frame')
             continue
         else:
+            print('Captured frame')
             time.sleep(delay_time)
            
         # print(f'Captured frame: {frame.shape}')
@@ -70,8 +71,7 @@ def capture_frames(cap, analyze_queue, display_queue):
         # Get a frame and normalize it
         new_frame = normalize(frame)
 
-        # Accumulate frames and make them 6 dimensional (N, S, C, T, W, H)
-        #  1. N -> Number of inference videos
+
         #  2. S -> Number of samples within one video
         #  3. C -> Image channels
         #  4. T -> Frames within video
@@ -151,7 +151,7 @@ def infer_frames(analyze_queue, label_queue, model=None):
             inferences += 1
 
 
-def write_frames(mp4_out, display_queue, label_queue):
+def write_frames(m4_out, display_queue, label_queue):
     """
     Writes frames to MP$ files. Just works through the frame list and adds the appropriate labels
 
@@ -194,7 +194,6 @@ def write_frames(mp4_out, display_queue, label_queue):
                         frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
-                    print('wrote here!')
                     mp4_out.write(frame)
                     # print(f'Writing frame count {frame_count} action !')
                 else:
@@ -212,6 +211,56 @@ def write_frames(mp4_out, display_queue, label_queue):
                 else:
                     break
 
+def display_frames(display_queue, label_queue):
+    """
+    Writes frames to MP$ files. Just works through the frame list and adds the appropriate labels
+
+    Args:
+        mp4_out: This is the CV2 mp4 writer
+        label_queue: This is the queue holding the latest labels
+
+    Returns:
+
+    """
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.4
+    font_color = (255, 255, 255)
+    thickness = 1
+    line_type = 2
+    
+    action_frame = None
+    action = '..'
+    while True:
+        try:
+            # It has both action and label
+            action, action_frame = label_queue.popleft()
+            print(f'Action {action} on frame {action_frame}')
+        except IndexError:
+            pass
+
+        # Name all labels upto the action frame as previous label
+        if display_queue and action_frame is not None:
+            # Get the first frame count
+            frame, frame_count = display_queue[0]
+            
+            while frame_count < action_frame + 16:
+                frame, frame_count = display_queue.popleft()
+                print('new frame')   
+                # Label the 32 frames associated with the action
+                if frame_count > action_frame - 16:
+                    if get_model is not None:
+                        frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
+
+                    # Writing the frame to mp4 with annotation
+                    cv2.imshow(frame)
+               
+                # If there are no more elements on the display queue then quit
+                if display_queue:
+                    frame, frame_count = display_queue[0]
+                else:
+                    break
+
 
 def main():
     """
@@ -219,45 +268,55 @@ def main():
     Returns:
 
     """
+
+    # Setting up configuration for inference
     device = 'cuda:0'
     # Setup the cofiguration and data file
     config_file = '../configs/bsl_config.py'
     input_video_path = '../notebooks/source_video.mp4'
     check_point_file = '../configs/best_model.pth'
+    do_webcam = True  # Is the video source a webcam or a video file?
+    write_to_video = False  # Write output to video or not?
+    display_video = True  # Write output to video or not?
 
-    # noinspection PyUnresolvedReferences
-    print(f'checking CUDA is available...{torch.cuda.is_available()}')
-    torch.cuda.set_device(0) if torch.cuda.is_available() else print('No Cuda Devices!')
-
-    # Capture from webcam or capture from file
-    do_webcam = True
+    # Check whether webcam is enabled
     if do_webcam:
-        # use gstreamer for video directly; set the fps
-        print('Streaming!!!')
-        camset= "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! " \
-                "nvv4l2decoder ! nvvidconv ! video/x-raw, format=I420 ! videoconvert ! video/x-raw, format=BGR ! " \
-                "appsink drop=1"
+        if not input_video_path:
+            raise ValueError('As webcam source was not chosen an input video path must be provided')
+
+    if get_model is not None and torch is not None:
+        print(f'checking CUDA is available...{torch.cuda.is_available()}')
+        torch.cuda.set_device(0) if torch.cuda.is_available() else warnings.warn('No Cuda Deviceswere found, CPU inference will be very slow')
+        model = get_model(config_file, check_point_file, device=device)
+
+    # Enable the nput source for cv2
+    # 1. Either through webcam
+    if do_webcam:
+        # This is the Gstreamer for capturing webcam and converting to frames
+        webcam_str = "v4l2src ! "
+        format_str_1 = "nvvidconv ! video/x-raw(memory:NVMM),width=404,height=224,framerate=30/1 ! "
+        format_str_2 = "nvvidconv top=0 bottom=224 left=90 right=314 ! video/x-raw(memory:NVMM),width=224,height=224,framerate=30/1 ! "
+        format_change_str = "videoconvert ! "
+        appsink_str = "appsink drop=1"
+        camset = webcam_str + format_str_1 + format_str_2 + format_change_str + appsink_str
+        print(camset)
+
+        # Capture frame using Gstreamer
         cap = cv2.VideoCapture(camset, cv2.CAP_GSTREAMER)
+    # 2. Or thorugh a file
     else:
-        print('using video from file')
         cap = cv2.VideoCapture(input_video_path)
 
-    #Load Model
-    if get_model is not None:
-        model = get_model(config_file, check_point_file, device=device)
-        print('Model  loaded to device')
-    else:
-        model = None
-        print('No Model!')
+    if not cap.isOpened():
+        cap.release()
+        raise ValueError('OpenCV either could not read from webcam or read from file')
 
-    # This defines the format for the write
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    if model is None:
-        mp4_out = cv2.VideoWriter('../notebooks/source_video.mp4', fourcc, 20, (224, 224))
-    else:
-        mp4_out = cv2.VideoWriter('../notebooks/interpreted.mp4', fourcc, 20, (224, 224))
-    # fourcc = cv2.VideoWriter_fourcc(*'MJPG')
-    # mp4_out = cv2.VideoWriter('output.avi', fourcc, 20, (224, 224))
+   
+    # If the output frames must be sent to a video file then 
+    if write_to_video:
+        # This defines the format for the write
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        mp4_out = cv2.VideoWriter('../notebooks/out_video.mp4', fourcc, 20, (224, 224))
 
     # Create two queues
     # 1. To hold the images as they are captured
@@ -266,17 +325,20 @@ def main():
     display_queue = deque([], 1500)
     label_queue = deque([], 300)
     analyze_queue = deque([], 32)
-
     try:
-        print('starting analysis....')
-        # Capture the frames as they come in
-        capture = Thread(target=capture_frames, args=(cap, analyze_queue, display_queue), daemon=True)
-        capture.start()
-        
-        # Analyse and give them a label
+        # Start the inference first
         analyze = Thread(target=infer_frames, args=(analyze_queue, label_queue, model), daemon=True)
         analyze.start()
-        
+    
+        # Capture the frames as they come
+        capture = Thread(target=capture_frames, args=(cap, analyze_queue, display_queue, do_webcam, input_video_path), daemon=True)
+        capture.start()
+       
+        if display_video:
+            # This displays the labeled frames
+            display = Thread(target=display_frames, args=(display_queue, label_queue), daemon=True)
+            display.start()
+
         # Write to file
         # write = Thread(target=write_frames, args=(mp4_out, display_queue, label_queue), daemon=True)
         # write.start()
@@ -284,20 +346,24 @@ def main():
         # Join the threads
         capture.join()
         analyze.join()
-        # write.join()
+
+        if display_video:
+            display.join()
+
+        if write_to_video:
+            write.join()
+
+
     except KeyboardInterrupt:
-        # 
         cap.release()
-        
-        # Writing everything 
-        print('Writing to inference')
-        write_frames(mp4_out, display_queue, label_queue)
-        
-        print('Releasing all')
-        # When everything done, release the capture
-        cap.release()
-        mp4_out.release()
         cv2.destroyAllWindows()
+        
+        if write_to_video:
+            # Writing everything 
+            print('Writing to inference')
+            write_frames(mp4_out, display_queue, label_queue)
+
+        print('Done')
 
 
 if __name__ == '__main__':

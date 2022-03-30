@@ -35,4 +35,4 @@ cd ..
 
 # If the image does not exist, then build it
 docker image inspect athiruve/swin:bsl_edge > /dev/null || docker build --no-cache -t athiruve/swin:bsl_edge -f docker/DockerFile.edge_shell .
-docker run -it --device=/dev/video0:/dev/video0 --privileged --gpus all --rm --network=host --ipc=host -v $PWD/store/:/workspace athiruve/swin:bsl_edge
+docker run -it --device=/dev/video0:/dev/video0 -e DISPLAY=$DISPLAY --privileged --gpus all --rm --network=host --ipc=host -v $PWD/store/:/workspace athiruve/swin:bsl_edge

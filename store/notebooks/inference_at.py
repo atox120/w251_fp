@@ -4,8 +4,8 @@ import cv2
 import time
 import warnings
 import numpy as np
-from threading import Thread
 from collections import deque
+from threading import Thread, Barrier, BrokenBarrierError
 
 sys.path.append(os.path.abspath(""))
 sys.path.append(os.path.abspath("../Video-Swin-Transformer"))
@@ -47,22 +47,34 @@ def interpret(index):
     return text_form[index]
 
 
-def capture_frames(analyze_queue, display_queue, do_webcam, input_video_path=''):
+def capture_frames(barrier, cap, analyze_queue, display_queue):
+    """
+    Capture the frames in a sequence and load to Deque
 
+    Args:
+        analyze_queue: Queue of frames to analyze, stores the reformatted frames
+        display_queue: Queue of frames to display, stores without format changes
+        model: Model for inference
+
+    Returns:
+    """
+    # Wait for other threads to start
+    print('capture_frames ready')
+    barrier.wait()
+    print('Capture thread started')
     count = 0
     delay_time = 0
     time_accum = deque([], 30)
+
+    # While the VideoCapturing is open
     while cap.isOpened():
         # Capture the frame
         ret, frame = cap.read()
-        
         start = time.perf_counter()
 
         if frame is None:
-            print('None frame')
             continue
         else:
-            print('Captured frame')
             time.sleep(delay_time)
            
         # print(f'Captured frame: {frame.shape}')
@@ -70,7 +82,6 @@ def capture_frames(analyze_queue, display_queue, do_webcam, input_video_path='')
 
         # Get a frame and normalize it
         new_frame = normalize(frame)
-
 
         #  2. S -> Number of samples within one video
         #  3. C -> Image channels
@@ -87,9 +98,16 @@ def capture_frames(analyze_queue, display_queue, do_webcam, input_video_path='')
         delay_time = 0.033 - np.mean(time_accum)
         delay_time = 0 if delay_time < 0 else delay_time
         count += 1
+
+        if count % 10 == 0:
+            time.sleep(1/30)
+    
+    # No more frames being capture, done with input
+    print('Completed frame loading')
+    barrier.abort()
     
 
-def infer_frames(analyze_queue, label_queue, model=None):
+def infer_frames(barrier, analyze_queue, label_queue, model=None):
     """
     Takes the latest 32 frames and makes an inference on them. It then converts the inference to a text label
 
@@ -101,6 +119,10 @@ def infer_frames(analyze_queue, label_queue, model=None):
     Returns:
 
     """
+    # Wait for other threads to start
+    print('infer_frames ready')
+    barrier.wait()
+    print('Infer thread started')
     
     inferences = 0
     while True:
@@ -114,6 +136,8 @@ def infer_frames(analyze_queue, label_queue, model=None):
             frame_counts = [x[1] for x in analyze_frames]
             frame_count = int(np.mean(frame_counts))
             analyze_frames = [x[0] for x in analyze_frames]
+            
+            print(f'Analyzing frame {frame_count}')
             
             # Accumulate into the inference numpy array
             to_tensor = np.concatenate(analyze_frames, axis=3)
@@ -140,6 +164,7 @@ def infer_frames(analyze_queue, label_queue, model=None):
 
                 # Add the probability of that action and inference number
                 action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
+                print(f'Action: {action}')
             else:
                 print('doing nothing')
                 action = '..'
@@ -147,13 +172,80 @@ def infer_frames(analyze_queue, label_queue, model=None):
             # 
             label_queue.append((action, frame_count))
             print(f'Inference {action} on frame count {frame_count} inference count {inferences}')
-            
             inferences += 1
+        
+        if barrier.broken:
+            print('Broken barrier')
+            # Wait 5s for frames to infer
+            time.sleep(5)
+            break
+
+
+def display_frames(barrier, display_queue, label_queue):
+    """
+    Writes frames to MP$ files. Just works through the frame list and adds the appropriate labels
+
+    Args:
+        mp4_out: This is the CV2 mp4 writer
+        label_queue: This is the queue holding the latest labels
+
+    Returns:
+
+    """
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.4
+    font_color = (255, 255, 255)
+    thickness = 1
+    line_type = 2
+
+    # Wait for other threads to start
+    print('display_frames ready')
+    barrier.wait()
+    print('Display thread started')
+    
+    action_frame = None
+    action = '..'
+    while True:
+        try:
+            # It has both action and label
+            action, action_frame = label_queue.popleft()
+            print(f'Action {action} on frame {action_frame}')
+        except IndexError:
+            pass
+
+        # Name all labels upto the action frame as previous label
+        if display_queue and action_frame is not None:
+            # Get the first frame count
+            frame, frame_count = display_queue[0]
+            
+            while frame_count < action_frame + 16:
+                frame, frame_count = display_queue.popleft()
+                print('new frame')   
+                # Label the 32 frames associated with the action
+                if frame_count > action_frame - 16:
+                    if get_model is not None:
+                        frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
+
+                    # Writing the frame to mp4 with annotation
+                    cv2.imshow(frame)
+               
+                # If there are no more elements on the display queue then quit
+                if display_queue:
+                    frame, frame_count = display_queue[0]
+                else:
+                    break
+        
+        if barrier.broken:
+            print('Broken barrier')
+            # Wait 5s for frames to infer
+            time.sleep(5)
+            break
 
 
 def write_frames(m4_out, display_queue, label_queue):
     """
-    Writes frames to MP$ files. Just works through the frame list and adds the appropriate labels
+    Writes frames to mp4 files. Just works through the frame list and adds the appropriate labels
 
     Args:
         mp4_out: This is the CV2 mp4 writer
@@ -211,57 +303,6 @@ def write_frames(m4_out, display_queue, label_queue):
                 else:
                     break
 
-def display_frames(display_queue, label_queue):
-    """
-    Writes frames to MP$ files. Just works through the frame list and adds the appropriate labels
-
-    Args:
-        mp4_out: This is the CV2 mp4 writer
-        label_queue: This is the queue holding the latest labels
-
-    Returns:
-
-    """
-
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.4
-    font_color = (255, 255, 255)
-    thickness = 1
-    line_type = 2
-    
-    action_frame = None
-    action = '..'
-    while True:
-        try:
-            # It has both action and label
-            action, action_frame = label_queue.popleft()
-            print(f'Action {action} on frame {action_frame}')
-        except IndexError:
-            pass
-
-        # Name all labels upto the action frame as previous label
-        if display_queue and action_frame is not None:
-            # Get the first frame count
-            frame, frame_count = display_queue[0]
-            
-            while frame_count < action_frame + 16:
-                frame, frame_count = display_queue.popleft()
-                print('new frame')   
-                # Label the 32 frames associated with the action
-                if frame_count > action_frame - 16:
-                    if get_model is not None:
-                        frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
-
-                    # Writing the frame to mp4 with annotation
-                    cv2.imshow(frame)
-               
-                # If there are no more elements on the display queue then quit
-                if display_queue:
-                    frame, frame_count = display_queue[0]
-                else:
-                    break
-
-
 def main():
     """
 
@@ -275,10 +316,10 @@ def main():
     config_file = '../configs/bsl_config.py'
     input_video_path = '../notebooks/source_video.mp4'
     check_point_file = '../configs/best_model.pth'
-    do_webcam = True  # Is the video source a webcam or a video file?
-    write_to_video = False  # Write output to video or not?
-    display_video = True  # Write output to video or not?
-
+    do_webcam = False  # Is the video source a webcam or a video file?
+    write_to_video = True  # Write output to video or not?
+    display_video = False  # Write output to video or not?
+    
     # Check whether webcam is enabled
     if do_webcam:
         if not input_video_path:
@@ -288,6 +329,15 @@ def main():
         print(f'checking CUDA is available...{torch.cuda.is_available()}')
         torch.cuda.set_device(0) if torch.cuda.is_available() else warnings.warn('No Cuda Deviceswere found, CPU inference will be very slow')
         model = get_model(config_file, check_point_file, device=device)
+        print('Model loaded waiting 1s')
+        time.sleep(1)
+    else:
+        model = None
+
+    #   
+    num_barriers = 2 + display_video # One for video capture, one for inference, one to display(if set)
+    barrier = Barrier(num_barriers, timeout=10)  # Create as many barriers and wait 10s for timeout
+
 
     # Enable the nput source for cv2
     # 1. Either through webcam
@@ -295,8 +345,9 @@ def main():
         # This is the Gstreamer for capturing webcam and converting to frames
         webcam_str = "v4l2src ! "
         format_str_1 = "nvvidconv ! video/x-raw(memory:NVMM),width=404,height=224,framerate=30/1 ! "
-        format_str_2 = "nvvidconv top=0 bottom=224 left=90 right=314 ! video/x-raw(memory:NVMM),width=224,height=224,framerate=30/1 ! "
-        format_change_str = "videoconvert ! "
+        format_str_2 = "nvvidconv top=0 bottom=224 left=90 right=314 ! video/x-raw(memory:NVMM),width=224,height=224,framerate=30/1 ! "  
+        format_str_2 = "nvvidconv ! video/x-raw,width=224,height=224,framerate=30/1 ! "  # This copies from NVMM memory to CPU memory
+        format_change_str = "videoconvert ! video/x-raw,format=BGR ! "
         appsink_str = "appsink drop=1"
         camset = webcam_str + format_str_1 + format_str_2 + format_change_str + appsink_str
         print(camset)
@@ -311,9 +362,9 @@ def main():
         cap.release()
         raise ValueError('OpenCV either could not read from webcam or read from file')
 
-   
     # If the output frames must be sent to a video file then 
     if write_to_video:
+        print('Starting writer')
         # This defines the format for the write
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         mp4_out = cv2.VideoWriter('../notebooks/out_video.mp4', fourcc, 20, (224, 224))
@@ -327,22 +378,23 @@ def main():
     analyze_queue = deque([], 32)
     try:
         # Start the inference first
-        analyze = Thread(target=infer_frames, args=(analyze_queue, label_queue, model), daemon=True)
+        analyze = Thread(target=infer_frames, args=(barrier, analyze_queue, label_queue, model), daemon=True)
         analyze.start()
     
         # Capture the frames as they come
-        capture = Thread(target=capture_frames, args=(cap, analyze_queue, display_queue, do_webcam, input_video_path), daemon=True)
+        capture = Thread(target=capture_frames, args=(barrier, cap, analyze_queue, display_queue), daemon=True)
         capture.start()
        
         if display_video:
             # This displays the labeled frames
-            display = Thread(target=display_frames, args=(display_queue, label_queue), daemon=True)
+            display = Thread(target=display_frames, args=(barrier, display_queue, label_queue), daemon=True)
             display.start()
 
         # Write to file
         # write = Thread(target=write_frames, args=(mp4_out, display_queue, label_queue), daemon=True)
         # write.start()
 
+        print('Synchornizing threads')
         # Join the threads
         capture.join()
         analyze.join()
@@ -350,11 +402,10 @@ def main():
         if display_video:
             display.join()
 
-        if write_to_video:
-            write.join()
+    except (KeyboardInterrupt, BrokenBarrierError):
+        pass
+    finally:
 
-
-    except KeyboardInterrupt:
         cap.release()
         cv2.destroyAllWindows()
         
@@ -362,7 +413,6 @@ def main():
             # Writing everything 
             print('Writing to inference')
             write_frames(mp4_out, display_queue, label_queue)
-
         print('Done')
 
 

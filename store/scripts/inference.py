@@ -161,12 +161,14 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
             analyze_frames = [x[0] for x in analyze_frames]
 
             # Accumulate into the inference numpy array
-            to_tensor = np.concatenate(analyze_frames, axis=3)
+            # to_tensor = np.concatenate(analyze_frames, axis=3)
+            batch_tensor = torch.cat(analyze_frames, dim=3)
             
             # Convert into the format the model is expecting
             if torch is not None:
                 # noinspection PyUnresolvedReferences
-                data_loader = [{"label": 0, "imgs": torch.from_numpy(to_tensor).to(torch.float32)}]
+                # data_loader = [{"label": 0, "imgs": torch.from_numpy(to_tensor).to(torch.float32)}]
+                data_loader = [{"label": 0, "imgs": batch_tensor}]
             else:
                 data_loader = []
             
@@ -174,7 +176,7 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
             # This operation should take about 130ms
             if model is not None and do_infer:
-                logger.info(f'Preparing inference on frame count {frame_count} ' +
+                logger.info(f'Preparing inference on frame count {frame_count} shape {batch_tensor.shape}' +
                             f' took {time.perf_counter()-start:.3f}s')
                 # noinspection PyBroadException
                 try:
@@ -300,7 +302,7 @@ def write_frames_all(logger, display_queue, label_queue):
     logger.info('Starting writer')
     # This defines the format for the write
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=20, frameSize=(224, 224))
+    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=30, frameSize=(224, 224))
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.4
@@ -359,7 +361,7 @@ def write_frames(logger, display_queue, label_queue):
     logger.info('Starting writer')
     # This defines the format for the write
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=20, frameSize=(224, 224))
+    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=30, frameSize=(224, 224))
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.4
@@ -489,6 +491,7 @@ def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, in
             new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
 
         # Add the frames to queues
+        new_frame = torch.from_numpy(new_frame).to(torch.float32)
         analyze_queue.append((new_frame, count))
 
         # Capture frames
@@ -523,9 +526,9 @@ def create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_vide
     #
     gstreamer_list = [
         "v4l2src device=/dev/video0",  # Get the webcam source
-        "nvvidconv ! video/x-raw(memory:NVMM),framerate=(fraction)30/1,width=320,height=240",  # Shrink to size
+        "nvvidconv ! video/x-raw(memory:NVMM),framerate=(fraction)30/1,width=298,height=224",  # Shrink to size
         # "nvvidconv top=0 bottom=240 left = 90 right=320 ! video/x-raw,width=224,height=224,format=RGBA",
-        "nvvidconv top=0 bottom=240 left = 90 right=320 ! video/x-raw,width=224,height=224",  # Center crop
+        "nvvidconv top=0 bottom=224 left=37 right=261 ! video/x-raw,width=224,height=224",  # Center crop
         ]
 
     if not sink_to_video:

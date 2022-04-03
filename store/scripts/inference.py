@@ -1,6 +1,7 @@
 import os
 import sys
 import cv2
+import six
 import time
 import logging
 import warnings
@@ -46,14 +47,25 @@ def create_logger(level, postfix=''):
     logger.setLevel(level)
 
     # Create a file handler
-    ha = logging.FileHandler(os.path.join(output_folder, 'bsl_%s.log' % postfix))
+    filename = 'bsl_%s.log' % postfix
+    haf = logging.FileHandler(os.path.join(output_folder, filename))
+
+    # Create a StreamHandle for displaying on screen
+    ha = logging.StreamHandler()
 
     # Set print level for handler
+    haf.setLevel(level)
+    haf.setFormatter(formatter)
+
+    # Set
     ha.setLevel(level)
     ha.setFormatter(formatter)
+
+    # 
+    logger.addHandler(haf)
     logger.addHandler(ha)
 
-    return logger
+    return logger, filename
 
 
 def normalize(frame):
@@ -97,9 +109,8 @@ def capture_frames(logger, barrier, pipeline, analyze_queue):
     Returns:
     """
 
-    logger.info('Ready for capture frames')
+    logger.info('capture frames ready')
     pipeline.set_state(Gst.State.PLAYING)
-    start = time.perf_counter()
     while True:
         msg = pipeline.get_bus().timed_pop_filtered(
             Gst.SECOND,
@@ -110,17 +121,6 @@ def capture_frames(logger, barrier, pipeline, analyze_queue):
             msg_type = Gst.message_type_get_name(msg.type)
             print(f'{msg.src.name}: [{msg_type}] {text}')
             break
-
-        # Capture frames
-        if len(analyze_queue) == 32:
-            logger.info('First 32 frames captured, waiting for inference')
-            barrier.wait()
-
-        if len(analyze_queue) == 32:
-            now = datetime.now()
-            now_str = "%s:%s.%s" % (now.hour, now.minute, now.microsecond)
-            logger.info(f'Captured another 32 frames took {time.perf_counter() - start:.2f} time is {now_str}')
-            start = time.perf_counter()
 
     # No more frames being capture, done with input
     logger.info('Completed capturing frames')
@@ -143,8 +143,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
     """
     # Wait for other threads to start
     logger.info('infer_frames ready')
-    barrier.wait()
-    logger.info('infer_frames started')
 
     previous_frame_count = -1
     inferences = 0
@@ -154,6 +152,8 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
         # Display the resulting frame
         if len(analyze_frames) == 32:
+
+            start = time.perf_counter()
             
             # This is the frame count where the label should switch
             frame_counts = [x[1] for x in analyze_frames]
@@ -177,8 +177,15 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
             # This operation should take about 130ms
             if model is not None and do_infer:
-                outputs = single_gpu_predictor(model, data_loader)
-                predicted_class = [np.argmax(x) for x in outputs][0]
+                logger.info(f'Starting inference on frame count {frame_count} of shape {to_tensor.shape}')
+                try:
+                    outputs = single_gpu_predictor(model, data_loader)
+                    predicted_class = [np.argmax(x) for x in outputs][0]
+                except Exception:
+                    t, v, tb = sys.exc_info()
+                    self.logger.error("Fatal error in model inference", exc_info=True)
+                    six.reraise(t, v, tb)
+
 
                 # Predicted probability
                 predicted_prob = outputs[0][predicted_class]
@@ -189,7 +196,11 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
                 # Add the probability of that action and inference number
                 action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
-                logger.info(f'Action: {action}')
+                logger.info(f'Action: {action} took {time.perf_counter()-start:.2f}s')
+
+                if inferences == 0:
+                    barrier.wait(timeout=60)
+                    logger.info('infer_frames started')
             else:
                 logger.debug('doing nothing, hence yielding thread')
                 time.sleep(0.0001)
@@ -232,7 +243,7 @@ def display_frames(logger, barrier, display_queue, label_queue):
 
     # Wait for other threads to start
     logger.info('display_frames ready')
-    barrier.wait()
+    barrier.wait(timeout=60)
     logger.info('Display thread started')
     
     action_frame = None
@@ -272,7 +283,7 @@ def display_frames(logger, barrier, display_queue, label_queue):
             break
 
 
-def write_frames(logger, mp4_out, display_queue, label_queue):
+def write_frames_all(logger, display_queue, label_queue):
     """
     Writes frames to mp4 files. Just works through the frame list and adds the appropriate labels
 
@@ -285,6 +296,73 @@ def write_frames(logger, mp4_out, display_queue, label_queue):
     Returns:
 
     """
+
+    
+    logger.info('Starting writer')
+    # This defines the format for the write
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, 20, (224, 224))
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.4
+    font_color = (255, 255, 255)
+    thickness = 1
+    line_type = 2
+    
+    label_list = list(label_queue)
+    display_list = list(display_queue)
+    
+    # Get each label
+    for action, action_frame in label_list:
+        logger.info(f'writing: Action {action} on frame {action_frame}')
+        
+        # Get the first frame count
+        drop_frames = 0
+        for frame, frame_count in display_list:
+            # Label the 32 frames associated with the action
+            if frame_count <= action_frame - 16:
+                frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
+
+                # Writing the frame to mp4 with annotation
+                logger.info(f'Writing frame {frame_count} without annotation')
+                mp4_out.write(frame)
+                drop_frames += 1
+
+            elif frame_count < action_frame + 16:
+                frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness,
+                                    line_type)
+
+                # Writing the frame to mp4 with annotation
+                logger.info(f'Writing frame {frame_count} with annotation')
+                mp4_out.write(frame)
+                drop_frames += 1
+            else:
+                break
+
+        display_list = display_list[drop_frames:]
+
+    mp4_out.release()
+                
+
+def write_frames(logger, display_queue, label_queue):
+    """
+    Writes frames to mp4 files. Just works through the frame list and adds the appropriate labels
+
+    Args:
+        logger: Logger object
+        mp4_out: This is the CV2 mp4 writer
+        display_queue: Queue of images to display
+        label_queue: This is the queue holding the latest labels
+
+    Returns:
+
+    """
+
+    
+    logger.info('Starting writer')
+    # This defines the format for the write
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, 20, (224, 224))
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.4
@@ -334,6 +412,7 @@ def write_frames(logger, mp4_out, display_queue, label_queue):
                     frame, frame_count = display_queue[0]
                 else:
                     break
+    
 
 
 def buffer_to_image(buffer, caps):
@@ -369,11 +448,12 @@ def buffer_to_image(buffer, caps):
     return None
 
 
-def on_frame_probe(logger, analyze_queue, display_queue, pad, info):
+def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, info):
     """
 
     Args:
         logger: Logger for logging
+        start: Start time for performance counter
         analyze_queue: Queue of frames to analyze, stores the reformatted frames
         display_queue: Queue of frames to display, stores without format changes
         pad:
@@ -387,8 +467,6 @@ def on_frame_probe(logger, analyze_queue, display_queue, pad, info):
     buffer = info.get_buffer()
     frame = buffer_to_image(buffer, pad.get_current_caps())
     if frame is not None:
-        start = time.perf_counter()
-
         # Get the previous frames count
         # If previous element does not exist then count should be zero
         try:
@@ -396,8 +474,10 @@ def on_frame_probe(logger, analyze_queue, display_queue, pad, info):
         except IndexError:
             count = 0
 
+        count += 1
+
         # Append the frame without formatting
-        display_queue.append((frame, count + 1))
+        display_queue.append((frame, count))
 
         # Get a frame and normalize it
         new_frame = normalize(frame)
@@ -409,18 +489,30 @@ def on_frame_probe(logger, analyze_queue, display_queue, pad, info):
             new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
 
         # Add the frames to queues
-        analyze_queue.append((new_frame, count+1))
-        logger.info(f'Frame count {count +1} processed in {time.perf_counter() -start:.2f}s')
+        analyze_queue.append((new_frame, count))
+
+        # Capture frames
+        if count == 32:
+            logger.info('First 32 frames captured, waiting for inference upto 60s')
+            barrier.wait(timeout=60)
+
+        if count % 10 == 0:
+            # Handing control to other threads every 10 frames
+            logger.info('Gstreamer handling control to other threads')
+            time.sleep(0.03)
+
+        logger.info(f'Frame count {count} processed in {time.perf_counter() -start:.2f}s')
 
     # Tell the pipeline everything is good
     return Gst.PadProbeReturn.OK
 
 
-def create_gst_streamer(logger, analyze_queue, display_queue, sink_to_video=False):
+def create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_video=False):
     """
 
     Args:
         logger: Logger for logging
+        barrier: Threading barrier
         analyze_queue: Queue of frames to analyze, stores the reformatted frames
         display_queue: Queue of frames to display, stores without format changes
         sink_to_video: if True, then the sink is video else the sink is memory
@@ -438,7 +530,7 @@ def create_gst_streamer(logger, analyze_queue, display_queue, sink_to_video=Fals
 
     if not sink_to_video:
         gstreamer_list += [
-            "nvvidconv ! video/x-raw,format=RGBA",  # Move from GPU to CPU memory(same on Jetson)
+            "nvvidconv ! video/x-raw,format=RGBA,framerate=30/1",  # Move from GPU to CPU memory(same on Jetson)
             "fakesink name=webcam_stream",  # Keep in memory
         ]
     else:
@@ -457,7 +549,7 @@ def create_gst_streamer(logger, analyze_queue, display_queue, sink_to_video=Fals
     logger.info(f'Gstreamer string is: {gstreamer_string}')
 
     # Using a partial function create an on frame probe function with logger and queue's
-    ofp = partial(on_frame_probe, logger, analyze_queue, display_queue)
+    ofp = partial(on_frame_probe, logger, time.perf_counter(), barrier, analyze_queue, display_queue)
 
     #  Create the pipeline
     Gst.init()
@@ -467,14 +559,18 @@ def create_gst_streamer(logger, analyze_queue, display_queue, sink_to_video=Fals
     return pipeline
 
 
-def main(display_video=False, write_to_video=False):
+def main(display_video=False, write_to_video=True):
     """
 
     Returns:
 
     """
 
-    logger = create_logger(level=10, postfix=str(datetime.now()))
+    logger, filename = create_logger(level=10, postfix=str(datetime.now()))
+    with open('../output/start_monitor.sh', 'w') as outfi:
+        outfi.write(f'tail -f "{filename}"')
+    print('Log file created')
+    time.sleep(5)
 
     # Setting up configuration for inference
     device = 'cuda:0'
@@ -483,15 +579,17 @@ def main(display_video=False, write_to_video=False):
     # input_video_path = '../notebooks/source_video.mp4'
     check_point_file = '../configs/best_model.pth'
     # do_webcam = False  # Is the video source a webcam or a video file?
-    write_to_video = False  # Write output to video or not?
-    display_video = False  # Write output to video or not?
 
     display_queue = deque([], 1500)
     label_queue = deque([], 300)
     analyze_queue = deque([], 32)
 
+    #
+    num_barriers = 2 + display_video # One for video capture, one for inference, one to display(if set)
+    barrier = Barrier(num_barriers, timeout=10)  # Create as many barriers and wait 10s for timeout
+
     # Create the Gsstreamer pipeline
-    pipeline = create_gst_streamer(logger, analyze_queue, display_queue, sink_to_video=False)
+    pipeline = create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_video=False)
 
     # Get the model
     if get_model is not None and torch is not None:
@@ -504,9 +602,6 @@ def main(display_video=False, write_to_video=False):
     else:
         model = None
 
-    #
-    num_barriers = 2 + display_video # One for video capture, one for inference, one to display(if set)
-    barrier = Barrier(num_barriers, timeout=10)  # Create as many barriers and wait 10s for timeout
 
     # If the output frames must be sent to a video file then 
     if write_to_video:
@@ -548,13 +643,17 @@ def main(display_video=False, write_to_video=False):
     except (KeyboardInterrupt, BrokenBarrierError):
         pass
     finally:
+        pipeline.set_state(Gst.State.NULL)
+        model = None
+        analyze_queue = None
         cv2.destroyAllWindows()
+        time.sleep(1)
         
         if write_to_video:
             # Writing everything 
             logger.info('Writing to inference')
             # noinspection PyUnboundLocalVariable
-            write_frames(logger, mp4_out, display_queue, label_queue)
+            write_frames_all(logger, display_queue, label_queue)
         logger.info('Done')
 
 

@@ -5,6 +5,7 @@ import six
 import time
 import logging
 import warnings
+import argparse
 import numpy as np
 from collections import deque
 from functools import partial
@@ -95,7 +96,7 @@ def interpret(index):
     return text_form[index]
 
 
-def capture_frames(logger, barrier, pipeline, analyze_queue):
+def capture_frames(logger, barrier, pipeline):
     """
     Capture the frames in a sequence and load to Deque.
         Pauses after first 32 frames
@@ -104,7 +105,6 @@ def capture_frames(logger, barrier, pipeline, analyze_queue):
         logger: Logger object
         barrier: Threading barrier to allow syncing between threads
         pipeline: Gstreamer pipeline for inference
-        analyze_queue: Queue of frames to analyze, stores the reformatted frames
 
     Returns:
     """
@@ -159,16 +159,13 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
             frame_counts = [x[1] for x in analyze_frames]
             frame_count = int(np.mean(frame_counts))
             analyze_frames = [x[0] for x in analyze_frames]
-            
-            logger.debug(f'Analyzing frame {frame_count}')
-            
+
             # Accumulate into the inference numpy array
             to_tensor = np.concatenate(analyze_frames, axis=3)
             
             # Convert into the format the model is expecting
             if torch is not None:
                 # noinspection PyUnresolvedReferences
-                logger.debug('loading tensors..')
                 data_loader = [{"label": 0, "imgs": torch.from_numpy(to_tensor).to(torch.float32)}]
             else:
                 data_loader = []
@@ -177,15 +174,17 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
             # This operation should take about 130ms
             if model is not None and do_infer:
-                logger.info(f'Starting inference on frame count {frame_count} of shape {to_tensor.shape}')
+                logger.info(f'Preparing inference on frame count {frame_count} ' +
+                            f' took {time.perf_counter()-start:.3f}s')
+                # noinspection PyBroadException
                 try:
                     outputs = single_gpu_predictor(model, data_loader)
                     predicted_class = [np.argmax(x) for x in outputs][0]
                 except Exception:
                     t, v, tb = sys.exc_info()
-                    self.logger.error("Fatal error in model inference", exc_info=True)
+                    logger.error("Fatal error in model inference", exc_info=True)
                     six.reraise(t, v, tb)
-
+                    return
 
                 # Predicted probability
                 predicted_prob = outputs[0][predicted_class]
@@ -196,7 +195,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
                 # Add the probability of that action and inference number
                 action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
-                logger.info(f'Action: {action} took {time.perf_counter()-start:.2f}s')
 
                 if inferences == 0:
                     barrier.wait(timeout=60)
@@ -208,7 +206,9 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
            
             if do_infer:
                 label_queue.append((action, frame_count))
-                logger.info(f'Inference {action} on frame count {frame_count} inference count {inferences}')
+                logger.info(f'Inference {action} on frame count {frame_count} inference count {inferences}' +
+                            f' took {time.perf_counter()-start:.2f}s'
+                            )
                 inferences += 1
 
             #  
@@ -267,7 +267,8 @@ def display_frames(logger, barrier, display_queue, label_queue):
                 # Label the 32 frames associated with the action
                 if frame_count > action_frame - 16:
                     if get_model is not None:
-                        frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
+                        frame = \
+                            cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
                     cv2.imshow(frame)
@@ -289,7 +290,6 @@ def write_frames_all(logger, display_queue, label_queue):
 
     Args:
         logger: Logger object
-        mp4_out: This is the CV2 mp4 writer
         display_queue: Queue of images to display
         label_queue: This is the queue holding the latest labels
 
@@ -297,11 +297,10 @@ def write_frames_all(logger, display_queue, label_queue):
 
     """
 
-    
     logger.info('Starting writer')
     # This defines the format for the write
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, 20, (224, 224))
+    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=20, frameSize=(224, 224))
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.4
@@ -350,7 +349,6 @@ def write_frames(logger, display_queue, label_queue):
 
     Args:
         logger: Logger object
-        mp4_out: This is the CV2 mp4 writer
         display_queue: Queue of images to display
         label_queue: This is the queue holding the latest labels
 
@@ -358,11 +356,10 @@ def write_frames(logger, display_queue, label_queue):
 
     """
 
-    
     logger.info('Starting writer')
     # This defines the format for the write
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, 20, (224, 224))
+    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=20, frameSize=(224, 224))
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.4
@@ -412,7 +409,6 @@ def write_frames(logger, display_queue, label_queue):
                     frame, frame_count = display_queue[0]
                 else:
                     break
-    
 
 
 def buffer_to_image(buffer, caps):
@@ -454,6 +450,7 @@ def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, in
     Args:
         logger: Logger for logging
         start: Start time for performance counter
+        barrier: Threading barrier object
         analyze_queue: Queue of frames to analyze, stores the reformatted frames
         display_queue: Queue of frames to display, stores without format changes
         pad:
@@ -559,12 +556,14 @@ def create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_vide
     return pipeline
 
 
-def main(display_video=False, write_to_video=True):
+def main(args):
     """
 
     Returns:
 
     """
+    display_video = args.display_video
+    write_video = args.write_video
 
     logger, filename = create_logger(level=10, postfix=str(datetime.now()))
     with open('../output/start_monitor.sh', 'w') as outfi:
@@ -585,7 +584,7 @@ def main(display_video=False, write_to_video=True):
     analyze_queue = deque([], 32)
 
     #
-    num_barriers = 2 + display_video # One for video capture, one for inference, one to display(if set)
+    num_barriers = 2 + display_video  # One for video capture, one for inference, one to display(if set)
     barrier = Barrier(num_barriers, timeout=10)  # Create as many barriers and wait 10s for timeout
 
     # Create the Gsstreamer pipeline
@@ -602,14 +601,6 @@ def main(display_video=False, write_to_video=True):
     else:
         model = None
 
-
-    # If the output frames must be sent to a video file then 
-    if write_to_video:
-        print('Starting writer')
-        # This defines the format for the write
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        mp4_out = cv2.VideoWriter('../notebooks/out_video.mp4', fourcc, 20, (224, 224))
-
     # Create two queues
     # 1. To hold the images as they are captured
     # 3. Hold annotations of images
@@ -620,7 +611,7 @@ def main(display_video=False, write_to_video=True):
         analyze.start()
     
         # Capture the frames as they come
-        capture = Thread(target=capture_frames, args=(logger, barrier, pipeline, analyze_queue), daemon=True)
+        capture = Thread(target=capture_frames, args=(logger, barrier, pipeline), daemon=True)
         capture.start()
        
         if display_video:
@@ -644,12 +635,10 @@ def main(display_video=False, write_to_video=True):
         pass
     finally:
         pipeline.set_state(Gst.State.NULL)
-        model = None
-        analyze_queue = None
         cv2.destroyAllWindows()
         time.sleep(1)
         
-        if write_to_video:
+        if write_video:
             # Writing everything 
             logger.info('Writing to inference')
             # noinspection PyUnboundLocalVariable
@@ -657,6 +646,56 @@ def main(display_video=False, write_to_video=True):
         logger.info('Done')
 
 
-if __name__ == '__main__':
-    main()
+def parse_args(parse_options=None):
+    """
 
+    Args:
+        parse_options:
+
+    Returns:
+
+    """
+    parser = argparse.ArgumentParser(description='Model arguments parser')
+
+    feature_parser = parser.add_mutually_exclusive_group(required=False)
+    feature_parser.add_argument(
+        '--no-display-video',
+        action='store_false',
+        dest='display_video',
+        help='Display labeled videos')
+    feature_parser.add_argument(
+        '--display-video',
+        action='store_true',
+        dest='display_video',
+        help='Display labeled videos')
+    parser.set_defaults(display_video=True)
+
+    feature_parser = parser.add_mutually_exclusive_group(required=False)
+    feature_parser.add_argument(
+        '--no-write-video',
+        action='store_false',
+        dest='write_video',
+        help='Store videos to file')
+    feature_parser.add_argument(
+        '--write-video',
+        action='store_true',
+        dest='write_video',
+        help='Store videos to file')
+    parser.set_defaults(write_video=True)
+
+    if parse_options is None:
+        args = parser.parse_args()
+    else:
+        args = parser.parse_args(parse_options)
+
+    return args
+
+
+if __name__ == '__main__':
+
+    # inline_options = ['--display-video', '1', '--write-video', '0']
+    inline_options = None
+    # Get the command prompt options for inference
+    argso = parse_args(inline_options)
+
+    main(argso)

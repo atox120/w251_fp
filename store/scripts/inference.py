@@ -271,7 +271,7 @@ def display_frames(logger, barrier, display_queue, label_queue):
                             cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
-                    cv2.imshow(frame)
+                    cv2.imshow('Frame', frame)
                
                 # If there are no more elements on the display queue then quit
                 if display_queue:
@@ -436,7 +436,7 @@ def buffer_to_image(buffer, caps):
                 buffer=map_info.data
             )
             # Return a copy of that array as a numpy array.
-            return image_array[:, :, :3].copy()
+            return image_array[:, :, -2::-1].copy()
         finally:
             # Clean up the buffer mapping
             buffer.unmap(map_info)
@@ -464,6 +464,8 @@ def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, in
     buffer = info.get_buffer()
     frame = buffer_to_image(buffer, pad.get_current_caps())
     if frame is not None:
+        # print(np.min(frame))
+        # print(np.max(frame))
         # Get the previous frames count
         # If previous element does not exist then count should be zero
         try:
@@ -475,6 +477,7 @@ def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, in
 
         # Append the frame without formatting
         display_queue.append((frame, count))
+        # cv2.imshow('Frame', frame)
 
         # Get a frame and normalize it
         new_frame = normalize(frame)
@@ -668,7 +671,7 @@ def parse_args(parse_options=None):
         action='store_true',
         dest='display_video',
         help='Display labeled videos')
-    parser.set_defaults(display_video=True)
+    parser.set_defaults(display_video=False)
 
     feature_parser = parser.add_mutually_exclusive_group(required=False)
     feature_parser.add_argument(

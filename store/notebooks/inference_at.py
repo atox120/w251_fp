@@ -13,11 +13,14 @@ os.chdir("../Video-Swin-Transformer")
 
 print('Loading packages...')
 
-try:
-    import torch
-except ImportError:
-    torch = None
-    warnings.warn('Torch package was not found and hence not loaded. Inference taks cannot be performed')
+import torch
+from model_inference import get_model, single_gpu_predictor
+
+# try:
+#    import torch
+# except ImportError:
+#    torch = None
+#    warnings.warn('Torch package was not found and hence not loaded. Inference taks cannot be performed')
 
 
 try:
@@ -60,8 +63,6 @@ def capture_frames(barrier, cap, analyze_queue, display_queue):
     """
     # Wait for other threads to start
     print('capture_frames ready')
-    barrier.wait()
-    print('Capture thread started')
     count = 0
     delay_time = 0
     time_accum = deque([], 30)
@@ -100,12 +101,10 @@ def capture_frames(barrier, cap, analyze_queue, display_queue):
         count += 1
 
         if count == 32:
-            print('Pausing for first inference')
-            time.sleep(60)
+            print('Capture thread wating after 32 frames')
+            barrier.wait()
+            print('Capture thread started')
 
-        if count % 32 == 0:
-            time.sleep(1.0/1000)
-    
     # No more frames being capture, done with input
     print('Completed frame loading')
     barrier.abort()
@@ -182,7 +181,8 @@ def infer_frames(barrier, analyze_queue, label_queue, model=None):
                 label_queue.append((action, frame_count))
                 print(f'Inference {action} on frame count {frame_count} inference count {inferences}')
                 inferences += 1
-                time.sleep(1.0/1000)
+
+            time.sleep(0.01)
             
             #  
             previous_frame_count = frame_count

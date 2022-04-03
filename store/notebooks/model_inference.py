@@ -10,7 +10,6 @@ import warnings
 import argparse
 import numpy as np
 import os.path as osp
-from sklearn.metrics import confusion_matrix
 
 import mmcv
 from mmcv import Config, DictAction

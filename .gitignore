@@ -1,6 +1,7 @@
 store/.Trash-0/
 store/configs/.ipynb_checkpoints/
 store/notebooks/__pycache__/
+store/notebooks/*.mp4
 store/scripts/__pycache__/
 store/output/*.log
 store/output/*.sh

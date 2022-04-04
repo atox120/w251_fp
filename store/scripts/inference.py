@@ -10,7 +10,7 @@ import numpy as np
 from collections import deque
 from functools import partial
 from datetime import datetime
-from threading import Thread, Barrier, BrokenBarrierError
+from threading import Thread, BrokenBarrierError, Event
 
 import gi
 gi.require_version('Gst', '1.0')
@@ -176,6 +176,9 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
             # This operation should take about 130ms
             if model is not None and do_infer:
+                logger.info('Pausing other threads for inference')
+                barrier.clear()
+
                 logger.info(f'Preparing inference on frame count {frame_count} shape {batch_tensor.shape}' +
                             f' took {time.perf_counter()-start:.3f}s')
                 # noinspection PyBroadException
@@ -188,6 +191,9 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                     six.reraise(t, v, tb)
                     return
 
+                logger.info('Unfreezing other threads')
+                barrier.set()
+
                 # Predicted probability
                 predicted_prob = outputs[0][predicted_class]
                 action = interpret(predicted_class)
@@ -198,9 +204,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                 # Add the probability of that action and inference number
                 action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
 
-                if inferences == 0:
-                    barrier.wait(timeout=60)
-                    logger.info('infer_frames started')
             else:
                 logger.debug('doing nothing, hence yielding thread')
                 time.sleep(0.0001)
@@ -215,12 +218,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
 
             #  
             previous_frame_count = frame_count
-        
-        if barrier.broken:
-            logger.info('Broken barrier waiting 2s to finish inference')
-            # Wait 5s for frames to infer
-            time.sleep(2)
-            break
 
 
 def display_frames(logger, barrier, display_queue, label_queue):
@@ -462,9 +459,19 @@ def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, in
 
     """
 
-    #
+    # Initially it simply passes through
+    # But when inference is ready, it pauses frame collection
+    start = time.perf_counter()
+    barrier.wait()
+    end = time.perf_counter() - start
+
+    # If it waited more than 10ms then it probably waited for inference
+    if end > 0.01:
+        logger.info(f'Frame capture waited {end}s')
+
     buffer = info.get_buffer()
     frame = buffer_to_image(buffer, pad.get_current_caps())
+
     if frame is not None:
         # print(np.min(frame))
         # print(np.max(frame))
@@ -493,11 +500,6 @@ def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, in
         # Add the frames to queues
         new_frame = torch.from_numpy(new_frame).to(torch.float32)
         analyze_queue.append((new_frame, count))
-
-        # Capture frames
-        if count == 32:
-            logger.info('First 32 frames captured, waiting for inference upto 60s')
-            barrier.wait(timeout=60)
 
         if count % 10 == 0:
             # Handing control to other threads every 10 frames
@@ -591,7 +593,8 @@ def main(args):
 
     #
     num_barriers = 2 + display_video  # One for video capture, one for inference, one to display(if set)
-    barrier = Barrier(num_barriers, timeout=10)  # Create as many barriers and wait 10s for timeout
+    barrier = Event()  # Create as many barriers and wait 10s for timeout
+    barrier.set()
 
     # Create the Gsstreamer pipeline
     pipeline = create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_video=False)

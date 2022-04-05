@@ -1,8 +1,11 @@
 import os
 import sys
+sys.path.append(os.path.abspath(""))
+sys.path.append(os.path.abspath("../Video-Swin-Transformer"))
 import cv2
 import six
 import time
+import torch
 import logging
 import warnings
 import argparse
@@ -10,27 +13,18 @@ import numpy as np
 from collections import deque
 from functools import partial
 from datetime import datetime
+from mmcv import Config
+from mmcv.runner import load_checkpoint
+from mmcv.parallel import MMDataParallel
+from mmcv.runner.fp16_utils import wrap_fp16_model
+from mmaction.models import build_model
+from mmaction.utils import register_module_hooks
 from threading import Thread, Barrier, BrokenBarrierError
-
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst
-
-sys.path.append(os.path.abspath(""))
-sys.path.append(os.path.abspath("../Video-Swin-Transformer"))
 os.chdir("../Video-Swin-Transformer")
-
 print('Loading packages...')
-
-import torch
-from model_inference import get_model, single_gpu_predictor
-
-try:
-    from model_inference import get_model, single_gpu_predictor
-except ImportError:
-    warnings.warn('Failed to load inference libraries. Inference tasks cannot be performed')
-    get_model = None
-    single_gpu_predictor = None
 
 
 def create_logger(level, postfix=''):
@@ -127,6 +121,155 @@ def capture_frames(logger, barrier, pipeline):
     barrier.abort()
     
 
+def buffer_to_image(buffer, caps):
+    """
+
+    Args:
+        buffer: Memory buffer to load from?
+        caps:
+
+    Returns:
+
+    """
+    caps_structure = caps.get_structure(0)
+    height = caps_structure.get_value('height')
+    width = caps_structure.get_value('width')
+    pixel_bytes = 4
+
+    is_mapped, map_info = buffer.map(Gst.MapFlags.READ)
+    if is_mapped:
+        try:
+            # map buffer to numpy
+            image_array = np.ndarray(
+                (height, width, pixel_bytes),
+                dtype=np.uint8,
+                buffer=map_info.data
+            )
+            # Return a copy of that array as a numpy array.
+            return image_array[:, :, -2::-1].copy()
+        finally:
+            # Clean up the buffer mapping
+            buffer.unmap(map_info)
+
+    return None
+
+
+def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, info):
+    """
+
+    Args:
+        logger: Logger for logging
+        start: Start time for performance counter
+        barrier: Threading barrier object
+        analyze_queue: Queue of frames to analyze, stores the reformatted frames
+        display_queue: Queue of frames to display, stores without format changes
+        pad:
+        info:
+
+    Returns:
+
+    """
+
+    #
+    buffer = info.get_buffer()
+    frame = buffer_to_image(buffer, pad.get_current_caps())
+    if frame is not None:
+        # print(np.min(frame))
+        # print(np.max(frame))
+        # Get the previous frames count
+        # If previous element does not exist then count should be zero
+        try:
+            count = display_queue[-1][1]
+        except IndexError:
+            count = 0
+
+        count += 1
+
+        # Append the frame without formatting
+        display_queue.append((frame, count))
+        # cv2.imshow('Frame', frame)
+
+        # Get a frame and normalize it
+        new_frame = normalize(frame)
+
+        #  2. S -> Number of samples within one video
+        #  3. C -> Image channels
+        #  4. T -> Frames within video
+        new_frame = \
+            new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
+
+        # Add the frames to queues
+        new_frame = torch.from_numpy(new_frame).to(torch.float32)  # .cuda()
+        analyze_queue.append((new_frame, count))
+
+        # Capture frames
+        if count == 32:
+            logger.info('First 32 frames captured, waiting for inference upto 60s')
+            barrier.wait(timeout=60)
+
+        if count % 10 == 0:
+            # Handing control to other threads every 10 frames
+            logger.info('Gstreamer handling control to other threads')
+            time.sleep(0.01)
+
+        logger.info(f'Frame count {count} processed in {time.perf_counter() -start:.2f}s')
+
+    # Tell the pipeline everything is good
+    return Gst.PadProbeReturn.OK
+
+
+def create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_video=False):
+    """
+
+    Args:
+        logger: Logger for logging
+        barrier: Threading barrier
+        analyze_queue: Queue of frames to analyze, stores the reformatted frames
+        display_queue: Queue of frames to display, stores without format changes
+        sink_to_video: if True, then the sink is video else the sink is memory
+    Returns:
+
+    """
+
+    #
+    gstreamer_list = [
+        "v4l2src device=/dev/video0",  # Get the webcam source
+        "nvvidconv ! video/x-raw(memory:NVMM),framerate=(fraction)30/1,width=298,height=224",  # Shrink to size
+        # "nvvidconv top=0 bottom=240 left = 90 right=320 ! video/x-raw,width=224,height=224,format=RGBA",
+        "nvvidconv top=0 bottom=224 left=37 right=261 ! video/x-raw,width=224,height=224",  # Center crop
+        ]
+
+    if not sink_to_video:
+        gstreamer_list += [
+            "nvvidconv ! video/x-raw,format=RGBA,framerate=30/1",  # Move from GPU to CPU memory(same on Jetson)
+            "fakesink name=webcam_stream",  # Keep in memory
+        ]
+    else:
+        gstreamer_list += [
+            "nvvidconv ! video/x-raw",  # Move from GPU to CPU memory(same on Jetson)
+            "fakesink name=webcam_stream",  # Keep in memory
+            "queue ! tee name=t t. ! queue ! fakesink name=webcam_stream sync=true t.",  # No idea what this is
+            "queue ! nvvidconv ! nvegltransform ! nveglglessink sync=true"  # Sink to screen
+        ]
+
+    # Concatenate it all into a string
+    gstreamer_string = ""
+    for x in gstreamer_list:
+        gstreamer_string += x + ' ! '
+    gstreamer_string = gstreamer_string[:-3]
+    logger.info(f'Gstreamer string is: {gstreamer_string}')
+
+    # Using a partial function create an on frame probe function with logger and queue's
+    ofp = partial(on_frame_probe, logger, time.perf_counter(), barrier, analyze_queue, display_queue)
+
+    #  Create the pipeline
+    Gst.init()
+    pipeline = Gst.parse_launch(gstreamer_string)
+    pipeline.get_by_name('webcam_stream').get_static_pad('sink').add_probe(Gst.PadProbeType.BUFFER, ofp)
+
+    return pipeline
+
+
 def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
     """
     Takes the latest 32 frames and makes an inference on them. It then converts the inference to a text label
@@ -172,7 +315,7 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
             else:
                 data_loader = []
             
-            do_infer = False if previous_frame_count == frame_count else True
+            do_infer = False if frame_count == previous_frame_count else True
 
             # This operation should take about 130ms
             if model is not None and do_infer:
@@ -180,8 +323,9 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                             f' took {time.perf_counter()-start:.3f}s')
                 # noinspection PyBroadException
                 try:
-                    outputs = single_gpu_predictor(model, data_loader)
-                    predicted_class = [np.argmax(x) for x in outputs][0]
+                    with torch.no_grad():
+                        outputs = model(return_loss=False, **{"label": 0, "imgs": batch_tensor})
+                    predicted_class = np.argmax(outputs)
                 except Exception:
                     t, v, tb = sys.exc_info()
                     logger.error("Fatal error in model inference", exc_info=True)
@@ -201,6 +345,8 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                 if inferences == 0:
                     barrier.wait(timeout=60)
                     logger.info('infer_frames started')
+
+                # time.sleep(0.033)
             else:
                 logger.debug('doing nothing, hence yielding thread')
                 time.sleep(0.0001)
@@ -302,7 +448,7 @@ def write_frames_all(logger, display_queue, label_queue):
     logger.info('Starting writer')
     # This defines the format for the write
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=30, frameSize=(224, 224))
+    mp4_out = cv2.VideoWriter('../output/out_video.mp4', fourcc, fps=15, frameSize=(224, 224))
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     font_scale = 0.4
@@ -413,153 +559,54 @@ def write_frames(logger, display_queue, label_queue):
                     break
 
 
-def buffer_to_image(buffer, caps):
+def turn_off_pretrained(cfg):
+    # recursively find all pretrained in the model config,
+    # and set them None to avoid redundant pretrain steps for testing
+    if 'pretrained' in cfg:
+        cfg.pretrained = None
+
+    # recursively turn off pretrained value
+    for sub_cfg in cfg.values():
+        if isinstance(sub_cfg, dict):
+            turn_off_pretrained(sub_cfg)
+
+
+def prepare_model(logger, config_file, check_point_file, device='cuda:0', half_precision=False):
     """
-
-    Args:
-        buffer: Memory buffer to load from?
-        caps:
-
-    Returns:
-
-    """
-    caps_structure = caps.get_structure(0)
-    height = caps_structure.get_value('height')
-    width = caps_structure.get_value('width')
-    pixel_bytes = 4
-
-    is_mapped, map_info = buffer.map(Gst.MapFlags.READ)
-    if is_mapped:
-        try:
-            # map buffer to numpy
-            image_array = np.ndarray(
-                (height, width, pixel_bytes),
-                dtype=np.uint8,
-                buffer=map_info.data
-            )
-            # Return a copy of that array as a numpy array.
-            return image_array[:, :, -2::-1].copy()
-        finally:
-            # Clean up the buffer mapping
-            buffer.unmap(map_info)
-
-    return None
-
-
-def on_frame_probe(logger, start, barrier, analyze_queue, display_queue, pad, info):
-    """
-
-    Args:
-        logger: Logger for logging
-        start: Start time for performance counter
-        barrier: Threading barrier object
-        analyze_queue: Queue of frames to analyze, stores the reformatted frames
-        display_queue: Queue of frames to display, stores without format changes
-        pad:
-        info:
-
-    Returns:
+    Setup the model for half precision
 
     """
+    # Create the configuration from the file 
+    # Customization for training the BSL data set
+    cfg = Config.fromfile(config_file)
+    cfg.model.cls_head.num_classes = 5
+    cfg.data.test.test_mode = True
 
-    #
-    buffer = info.get_buffer()
-    frame = buffer_to_image(buffer, pad.get_current_caps())
-    if frame is not None:
-        # print(np.min(frame))
-        # print(np.max(frame))
-        # Get the previous frames count
-        # If previous element does not exist then count should be zero
-        try:
-            count = display_queue[-1][1]
-        except IndexError:
-            count = 0
+    # The flag is used to register module's hooks
+    cfg.setdefault('module_hooks', [])
 
-        count += 1
+    # remove redundant pretrain steps for testing
+    turn_off_pretrained(cfg.model)
 
-        # Append the frame without formatting
-        display_queue.append((frame, count))
-        # cv2.imshow('Frame', frame)
+    # build the model and load checkpoint
+    model = build_model(cfg.model, train_cfg=None, test_cfg=cfg.get('test_cfg'))
+    
+    if len(cfg.module_hooks) > 0:
+        register_module_hooks(model, cfg.module_hooks)
+    
+    # On a Jetson Nano this actually makes things slower
+    if half_precision:
+        logger.info('Enabling half precision')
+        wrap_fp16_model(model)
+    
+    load_checkpoint(model, check_point_file, map_location=device)
+    # model.cuda(0)
+    
+    # Does not work without this, need to checkout why
+    model = MMDataParallel(model, device_ids=[0])
+    model.eval()
 
-        # Get a frame and normalize it
-        new_frame = normalize(frame)
-
-        #  2. S -> Number of samples within one video
-        #  3. C -> Image channels
-        #  4. T -> Frames within video
-        new_frame = \
-            new_frame.transpose(2, 0, 1)[np.newaxis, np.newaxis, np.newaxis, :, :, :].transpose(0, 1, 3, 2, 4, 5)
-
-        # Add the frames to queues
-        new_frame = torch.from_numpy(new_frame).to(torch.float32)
-        analyze_queue.append((new_frame, count))
-
-        # Capture frames
-        if count == 32:
-            logger.info('First 32 frames captured, waiting for inference upto 60s')
-            barrier.wait(timeout=60)
-
-        if count % 10 == 0:
-            # Handing control to other threads every 10 frames
-            logger.info('Gstreamer handling control to other threads')
-            time.sleep(0.03)
-
-        logger.info(f'Frame count {count} processed in {time.perf_counter() -start:.2f}s')
-
-    # Tell the pipeline everything is good
-    return Gst.PadProbeReturn.OK
-
-
-def create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_video=False):
-    """
-
-    Args:
-        logger: Logger for logging
-        barrier: Threading barrier
-        analyze_queue: Queue of frames to analyze, stores the reformatted frames
-        display_queue: Queue of frames to display, stores without format changes
-        sink_to_video: if True, then the sink is video else the sink is memory
-    Returns:
-
-    """
-
-    #
-    gstreamer_list = [
-        "v4l2src device=/dev/video0",  # Get the webcam source
-        "nvvidconv ! video/x-raw(memory:NVMM),framerate=(fraction)30/1,width=298,height=224",  # Shrink to size
-        # "nvvidconv top=0 bottom=240 left = 90 right=320 ! video/x-raw,width=224,height=224,format=RGBA",
-        "nvvidconv top=0 bottom=224 left=37 right=261 ! video/x-raw,width=224,height=224",  # Center crop
-        ]
-
-    if not sink_to_video:
-        gstreamer_list += [
-            "nvvidconv ! video/x-raw,format=RGBA,framerate=30/1",  # Move from GPU to CPU memory(same on Jetson)
-            "fakesink name=webcam_stream",  # Keep in memory
-        ]
-    else:
-        gstreamer_list += [
-            "nvvidconv ! video/x-raw",  # Move from GPU to CPU memory(same on Jetson)
-            "fakesink name=webcam_stream",  # Keep in memory
-            "queue ! tee name=t t. ! queue ! fakesink name=webcam_stream sync=true t.",  # No idea what this is
-            "queue ! nvvidconv ! nvegltransform ! nveglglessink sync=true"  # Sink to screen
-        ]
-
-    # Concatenate it all into a string
-    gstreamer_string = ""
-    for x in gstreamer_list:
-        gstreamer_string += x + ' ! '
-    gstreamer_string = gstreamer_string[:-3]
-    logger.info(f'Gstreamer string is: {gstreamer_string}')
-
-    # Using a partial function create an on frame probe function with logger and queue's
-    ofp = partial(on_frame_probe, logger, time.perf_counter(), barrier, analyze_queue, display_queue)
-
-    #  Create the pipeline
-    Gst.init()
-    pipeline = Gst.parse_launch(gstreamer_string)
-    pipeline.get_by_name('webcam_stream').get_static_pad('sink').add_probe(Gst.PadProbeType.BUFFER, ofp)
-
-    return pipeline
+    return model
 
 
 def main(args):
@@ -570,12 +617,9 @@ def main(args):
     """
     display_video = args.display_video
     write_video = args.write_video
+    half_precision = args.half_precision
 
     logger, filename = create_logger(level=10, postfix=str(datetime.now()))
-    with open('../output/start_monitor.sh', 'w') as outfi:
-        outfi.write(f'tail -f "{filename}"')
-    print('Log file created')
-    time.sleep(5)
 
     # Setting up configuration for inference
     device = 'cuda:0'
@@ -593,19 +637,22 @@ def main(args):
     num_barriers = 2 + display_video  # One for video capture, one for inference, one to display(if set)
     barrier = Barrier(num_barriers, timeout=10)  # Create as many barriers and wait 10s for timeout
 
+    logger.info('Logger options:')
+    logger.info(f'\t display_video {display_video}')
+    logger.info(f'\t write_video {write_video}')
+    logger.info(f'\t half_precision {half_precision}')
+    logger.info(f'\t Number of barriers {num_barriers}')
+
     # Create the Gsstreamer pipeline
     pipeline = create_gstreamer(logger, barrier, analyze_queue, display_queue, sink_to_video=False)
 
     # Get the model
-    if get_model is not None and torch is not None:
-        print(f'checking CUDA is available...{torch.cuda.is_available()}')
-        torch.cuda.set_device(0) if torch.cuda.is_available() else \
+    logger.info(f'CUDA is available...{torch.cuda.is_available()}')
+    torch.cuda.set_device(0) if torch.cuda.is_available() else \
             warnings.warn('No Cuda Deviceswere found, CPU inference will be very slow')
-        model = get_model(config_file, check_point_file, device=device)
-        print('Model loaded waiting 1s')
-        time.sleep(1)
-    else:
-        model = None
+    
+    # Get the model ready for inference 
+    model = prepare_model(logger, config_file, check_point_file, device=device, half_precision=half_precision)
 
     # Create two queues
     # 1. To hold the images as they are captured
@@ -688,6 +735,19 @@ def parse_args(parse_options=None):
         dest='write_video',
         help='Store videos to file')
     parser.set_defaults(write_video=True)
+
+    feature_parser = parser.add_mutually_exclusive_group(required=False)
+    feature_parser.add_argument(
+        '--no-half-precision',
+        action='store_false',
+        dest='half_precision',
+        help='Store videos to file')
+    feature_parser.add_argument(
+        '--half-precision',
+        action='store_true',
+        dest='half_precision',
+        help='Store videos to file')
+    parser.set_defaults(half_precision=False)
 
     if parse_options is None:
         args = parser.parse_args()

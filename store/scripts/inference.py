@@ -307,14 +307,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
             # to_tensor = np.concatenate(analyze_frames, axis=3)
             batch_tensor = torch.cat(analyze_frames, dim=3)
             
-            # Convert into the format the model is expecting
-            if torch is not None:
-                # noinspection PyUnresolvedReferences
-                # data_loader = [{"label": 0, "imgs": torch.from_numpy(to_tensor).to(torch.float32)}]
-                data_loader = [{"label": 0, "imgs": batch_tensor}]
-            else:
-                data_loader = []
-            
             do_infer = False if frame_count == previous_frame_count else True
 
             # This operation should take about 130ms
@@ -414,9 +406,8 @@ def display_frames(logger, barrier, display_queue, label_queue):
                 logger.info('new frame')
                 # Label the 32 frames associated with the action
                 if frame_count > action_frame - 16:
-                    if get_model is not None:
-                        frame = \
-                            cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
+                    frame = \
+                        cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
                     cv2.imshow('Frame', frame)
@@ -536,16 +527,14 @@ def write_frames(logger, display_queue, label_queue):
 
                 # Label the 32 frames associated with the action
                 if frame_count <= action_frame - 16:
-                    if get_model is not None:
-                        frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
+                    frame = cv2.putText(frame, '!', (10, 220), font, font_scale, font_color, thickness, line_type)
 
                     # Writing the frame to mp4 with annotation
                     mp4_out.write(frame)
                     # print(f'Writing frame count {frame_count} action !')
                 else:
-                    if get_model is not None:
-                        frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness,
-                                            line_type)
+                    frame = cv2.putText(frame, action, (10, 220), font, font_scale, font_color, thickness,
+                                        line_type)
 
                     # Writing the frame to mp4 with annotation
                     logger.info('wrote now')
@@ -649,7 +638,7 @@ def main(args):
     # Get the model
     logger.info(f'CUDA is available...{torch.cuda.is_available()}')
     torch.cuda.set_device(0) if torch.cuda.is_available() else \
-            warnings.warn('No Cuda Deviceswere found, CPU inference will be very slow')
+        warnings.warn('No Cuda Deviceswere found, CPU inference will be very slow')
     
     # Get the model ready for inference 
     model = prepare_model(logger, config_file, check_point_file, device=device, half_precision=half_precision)

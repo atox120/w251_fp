@@ -94,10 +94,13 @@ def capture_frames(logger, barrier, cap, analyze_queue, display_queue):
 
     """
 
-    start = time.perf_counter()
     while cap.isOpened():
+        start = time.perf_counter()
         # Capture the frame
         ret, frame = cap.read()
+        
+        if frame is None:
+            break
 
         # If previous element does not exist then count should be zero
         try:
@@ -133,8 +136,14 @@ def capture_frames(logger, barrier, cap, analyze_queue, display_queue):
             logger.info('Gstreamer handling control to other threads')
             time.sleep(0.01)
 
-        logger.info(f'Frame count {count} processed in {time.perf_counter() - start:.2f}s')
-
+        frame_delay = 1.0/30 - (start-time.perf_counter())  # 30 FPS
+        frame_delay = 0 if frame_delay < 0 else frame_delay
+        time.sleep(frame_delay)
+        logger.info(f'Frame count {count} processed in {time.perf_counter() - start:.2f}s delaying {frame_delay}s')
+    
+    barrier.abort()
+    logger.info(f'All frames received!')
+    
 
 def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
     """
@@ -194,20 +203,20 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                 predicted_prob = outputs[0][predicted_class]
                 action = interpret(predicted_class)
 
-                if predicted_prob < 0.1:
-                    action = '..'
 
+                if predicted_prob > 0.5:
                     # Add the probability of that action and inference number
-                action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
+                    action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
+                else:
+                    # Add the probability of that action and inference number
+                    action = f'Unsure - cnt {inferences}'   
 
                 if inferences == 0:
-                    barrier.wait(timeout=60)
+                    barrier.wait(timeout=2)
                     logger.info('infer_frames started')
-
-                # time.sleep(0.033)
             else:
-                logger.debug('doing nothing, hence yielding thread')
-                time.sleep(0.0001)
+                logger.debug('doing nothing, hence yielding thread with sleep')
+                time.sleep(0.01)
                 action = '..'
 
             if do_infer:
@@ -413,12 +422,12 @@ def main(args):
     device = 'cuda:0'
     # Setup the cofiguration and data file
     config_file = '../configs/bsl_config.py'
-    # input_video_path = '../notebooks/source_video.mp4'
+    input_video_path = '../notebooks/source_video.mp4'
     check_point_file = '../configs/best_model.pth'
     # do_webcam = False  # Is the video source a webcam or a video file?
 
     display_queue = deque([], 1500)
-    label_queue = deque([], 300)
+    label_queue = deque([])
     analyze_queue = deque([], 32)
 
     #
@@ -433,10 +442,13 @@ def main(args):
 
     # Create the Gsstreamer pipeline
     # use gstreamer for video directly; set the fps
-    camset = "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! " \
-             "nvv4l2decoder ! nvvidconv ! video/x-raw, format=I420 ! videoconvert ! video/x-raw, format=BGR ! " \
-             "appsink drop=1"
-    cap = cv2.VideoCapture(camset, cv2.CAP_GSTREAMER)
+    
+    # camset = "udpsrc port=5000 ! application/x-rtp, media=video, encoding-name=H265 ! rtph265depay ! h265parse ! " \
+    #         "nvv4l2decoder ! nvvidconv ! video/x-raw, format=I420 ! videoconvert ! video/x-raw, format=BGR ! " \
+    #         "appsink drop=1"
+    # cap = cv2.VideoCapture(camset, cv2.CAP_GSTREAMER)
+
+    cap = cv2.VideoCapture(input_video_path)
 
     # Get the model
     logger.info(f'CUDA is available...{torch.cuda.is_available()}')

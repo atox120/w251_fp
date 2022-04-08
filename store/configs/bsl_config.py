@@ -94,8 +94,9 @@ data = dict(
         ann_file=ann_file_test,
         data_prefix=data_root_test,
         pipeline=test_pipeline))
-evaluation = dict(
-    interval=5, metrics=['top_k_accuracy', 'mean_class_accuracy'])
+
+# Uncommenting the below triggers an accuracy enalysis every nth intreval
+# evaluation = dict(interval=1, metrics=['top_k_accuracy', 'mean_class_accuracy'])
 
 # optimizer
 optimizer = dict(type='AdamW', lr=1e-3, betas=(0.9, 0.999), weight_decay=0.02,

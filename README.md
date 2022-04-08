@@ -2,8 +2,7 @@
 # Alex To, Aswin Thiruvengadam, Dan Ortiz, Jeffrey Laughman
 
 ## Introduction
-
-blah blah blah 
+Baby sign language is comprised of a series of symbols (closely related to ASL) to improve communication between babies and caregivers prior to vocal vocabulary develops. The goal is to reduce crying and tantrums by providing a medium of communication and reducing caregiver guessing.
 
 ## Setting up the Environment 
 ### Cloud 

@@ -4,7 +4,7 @@
 ## 1. Introduction
 Baby sign language is comprised of a series of symbols (closely related to ASL) to improve communication between babies and caregivers prior to vocal vocabulary develops. The goal is to reduce crying and tantrums by providing a medium of communication and reducing caregiver guessing.
 
-## 2. Training on the cloud
+## 2. Training on a cloud VM or GPU workstation 
 
 ### 2.1 Sourcing the dataset 
 *Note: the code below does not download the full Kinetic400 dataset, which takes hours to download*
@@ -113,8 +113,21 @@ after_run:
 
 The pytorch model files are stored in the folder *workspace/Video-Swin-Transformer/work_dirs/k400_swin_tiny_patch244_window877.py*. Note the .py in the folder name, this is by design. There is a .pth for each epoch but the best model is updated with the name "best_top_1_acc_epoch_<number>.pth". The latest epoch model with that label is the best model for inference based on the performance on the validation dataset.
 
-### 2.5 Inference on the cloud
+*Download the, above described, best model to your local folder by navigating into the folder, right clock and download*. Rename the file simply as best_model.pth. copt it into *workspace/configs* folder. This will now be used for inference. 
         
+### 2.5 Test on the cloud
+To test the model performance on the cloud open *bsl_test.py* and run all cells. 
+
+        		Predicted label				
+		all done	Water 	Poop	Dad	Mom
+True label	all done	2	0	0	0	0
+	Water 	0	1	0	0	1
+	Poop	0	0	2	0	0
+	Dad	0	0	0	2	0
+	Mom	0	1	0	0	1![image](https://user-images.githubusercontent.com/76710118/162588097-2587ad3a-ede8-4ef0-ab23-551b68f019a9.png)
+
+```      
+```
 
 ### Edge devices - untested. 
 
@@ -129,7 +142,6 @@ bash edge_start.sh
 ## Training and Inference
 ### Inference on tiny Kinetic400 data
 Navigate to the notebooks folder and open kinetics_tiny_inference.ipynb and run all cells. Note that the class labels for the dataset **do not match** the trained class labels. The accuracy will thus be near zero.
-
 
 ### Training on tiny Kinetic400 data
 Navigate to the notebooks folder and open kinetics_tiny_train.ipynb and run all cells.

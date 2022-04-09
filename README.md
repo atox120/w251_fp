@@ -116,9 +116,20 @@ The pytorch model files are stored in the folder *workspace/Video-Swin-Transform
 *Download the, above described, best model to your local folder by navigating into the folder, right clock and download*. Rename the file simply as best_model.pth. copt it into *workspace/configs* folder. This will now be used for inference. 
         
 ### 2.5 Test on the cloud
-To test the model performance on the cloud open *bsl_test.py* and run all cells. 
+To test the model performance on the cloud open *bsl_test.py* and run all cells. This should list out the accuracy score and a confusion matrix.
 
+```sh
+Evaluating top_k_accuracy ...
+
+top1_acc	0.8000
+top5_acc	1.0000
+top1_acc: 0.8000
+top5_acc: 1.0000
+```
+       
 ![image](https://user-images.githubusercontent.com/76710118/162588097-2587ad3a-ede8-4ef0-ab23-551b68f019a9.png)
+        
+### 2.6 
 
 ### Edge devices - untested. 
 

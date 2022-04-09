@@ -118,16 +118,7 @@ The pytorch model files are stored in the folder *workspace/Video-Swin-Transform
 ### 2.5 Test on the cloud
 To test the model performance on the cloud open *bsl_test.py* and run all cells. 
 
-        		Predicted label				
-		all done	Water 	Poop	Dad	Mom
-True label	all done	2	0	0	0	0
-	Water 	0	1	0	0	1
-	Poop	0	0	2	0	0
-	Dad	0	0	0	2	0
-	Mom	0	1	0	0	1![image](https://user-images.githubusercontent.com/76710118/162588097-2587ad3a-ede8-4ef0-ab23-551b68f019a9.png)
-
-```      
-```
+![image](https://user-images.githubusercontent.com/76710118/162588097-2587ad3a-ede8-4ef0-ab23-551b68f019a9.png)
 
 ### Edge devices - untested. 
 

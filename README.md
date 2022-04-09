@@ -111,6 +111,11 @@ after_run:
 [>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>] 55/55, 2.9 task/s, elapsed: 19s, ETA:     0s
 ```
 
+The pytorch model files are stored in the folder *workspace/Video-Swin-Transformer/work_dirs/k400_swin_tiny_patch244_window877.py*. Note the .py in the folder name, this is by design. There is a .pth for each epoch but the best model is updated with the name "best_top_1_acc_epoch_<number>.pth". The latest epoch model with that label is the best model for inference based on the performance on the validation dataset.
+
+### 2.5 Inference on the cloud
+        
+
 ### Edge devices - untested. 
 
 ***The instructions are for building on a Jetson device.***

@@ -203,7 +203,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                 predicted_prob = outputs[0][predicted_class]
                 action = interpret(predicted_class)
 
-
                 if predicted_prob > 0.5:
                     # Add the probability of that action and inference number
                     action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'

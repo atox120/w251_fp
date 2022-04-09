@@ -326,15 +326,16 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                 # Predicted probability
                 predicted_prob = outputs[0][predicted_class]
                 action = interpret(predicted_class)
-                
-                if predicted_prob < 0.1:
-                    action = '..'  
 
-                # Add the probability of that action and inference number
-                action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
+                if predicted_prob > 0.5:
+                    # Add the probability of that action and inference number
+                    action = f'{action} - prob {predicted_prob:.2f} - cnt {inferences}'
+                else:
+                    # Add the probability of that action and inference number
+                    action = f'Unsure - cnt {inferences}'
 
                 if inferences == 0:
-                    barrier.wait(timeout=60)
+                    barrier.wait(timeout=2)
                     logger.info('infer_frames started')
 
                 # time.sleep(0.033)

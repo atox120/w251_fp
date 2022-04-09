@@ -4,7 +4,7 @@
 ## 1. Introduction
 Baby sign language is comprised of a series of symbols (closely related to ASL) to improve communication between babies and caregivers prior to vocal vocabulary develops. The goal is to reduce crying and tantrums by providing a medium of communication and reducing caregiver guessing.
 
-## 2. Training on the cloud
+## 2. Training on a cloud VM or GPU workstation 
 
 ### 2.1 Sourcing the dataset 
 *Note: the code below does not download the full Kinetic400 dataset, which takes hours to download*
@@ -111,20 +111,89 @@ after_run:
 [>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>] 55/55, 2.9 task/s, elapsed: 19s, ETA:     0s
 ```
 
-### Edge devices - untested. 
+The pytorch model files are stored in the folder *workspace/Video-Swin-Transformer/work_dirs/k400_swin_tiny_patch244_window877.py*. Note the .py in the folder name, this is by design. There is a .pth for each epoch of model training but the best model is updated with the name "best_top_1_acc_epoch_<number>.pth". The latest epoch model with that label is the best model for inference based on the performance on the validation dataset.
 
-***The instructions are for building on a Jetson device.***
-Run the script and commands below. 
+*Download the, above described, best model to your local folder by navigating into the folder, right click and download*. Rename the file simply as best_model.pth. copt it into *workspace/configs* folder. This will now be used for inference.
+        
+### 2.5 Test on the cloud
+To test the model performance on the cloud open *bsl_test.py* and run all cells. This should list out the accuracy score and a confusion matrix.
+
+```sh
+Evaluating top_k_accuracy ...
+
+top1_acc	0.8000
+top5_acc	1.0000
+top1_acc: 0.8000
+top5_acc: 1.0000
+```
+        
+![image](https://user-images.githubusercontent.com/76710118/162588097-2587ad3a-ede8-4ef0-ab23-551b68f019a9.png)
+        
+### 2.6 Inference on the cloud
+The previous section ran the inference on video clips from the test set. The following section run inference on a video stream and generates a labeled video.
+
+1. It sources the video from source_video.mp4 in the notebooks folder
+2. It loads the video as frames at the rate of 30FPS
+3. Performs inference on a set of 32 frames
+4. The labeled videos are produced at output/out_video.mp4
+5. A log of the inferences in created in the output folder with the name bsl_<timestamp>.log
+
+Open a terminal in Jupyter lab and navigate to the scipts folder and run the following command.
+1. For 32 bit inference
+```sh
+python3 inference_file.py
+```
+        
+2. For 16bit inference
+```sh
+python3 inference_file.py --half-precision
+```
+
+## 3. Inference on the edge device
+
+Open a terminal on a Jetson device and type the following commands
 ```sh
 git clone https://github.com/atox120/w251_fp.git
 cd w251_fp
 bash edge_start.sh
 ```
+*Copy the model(best_model.pth) into store/configs folder*
 
-## Training and Inference
-### Inference on tiny Kinetic400 data
-Navigate to the notebooks folder and open kinetics_tiny_inference.ipynb and run all cells. Note that the class labels for the dataset **do not match** the trained class labels. The accuracy will thus be near zero.
+### 3.1 Inference of source_vide.mp4 on the edge
+The following section run inference on a video stream and generates a labeled video.
 
+1. It sources the video from source_video.mp4 in the notebooks folder
+2. It loads the video as frames at the rate of 30FPS
+3. Performs inference on a set of 32 frames
+4. The labeled videos are produced at output/out_video.mp4
+5. A log of the inferences in created in the output folder with the name bsl_<timestamp>.log
 
-### Training on tiny Kinetic400 data
-Navigate to the notebooks folder and open kinetics_tiny_train.ipynb and run all cells.
+1. For 32 bit inference
+```sh
+python3 inference_file.py
+```
+        
+2. For 16bit inference
+```sh
+python3 inference_file.py --half-precision
+```
+
+### 3.3 Inference using the webcam
+The following section run inference on a video stream from webcam and generates a video
+
+1. It sources the video from webcam
+2. It loads the video as frames at the rate of 30FPS
+3. Performs inference on a set of 32 frames
+4. The labeled videos are produced at output/out_video.mp4
+5. A log of the inferences in created in the output folder with the name bsl_<timestamp>.log
+
+Use ctrl-c to break out of webcam mode. The out_video.mp4 will be created once the streaming is stopped using ctrl-c
+1. For 32 bit inference
+```sh
+python3 inference.py
+```
+        
+2. For 16bit inference
+```sh
+python3 inference.py --half-precision
+```

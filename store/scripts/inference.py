@@ -306,7 +306,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
             # Accumulate into the inference numpy array
             # to_tensor = np.concatenate(analyze_frames, axis=3)
             batch_tensor = torch.cat(analyze_frames, dim=3)
-            
             do_infer = False if frame_count == previous_frame_count else True
 
             # This operation should take about 130ms
@@ -350,8 +349,6 @@ def infer_frames(logger, barrier, analyze_queue, label_queue, model=None):
                             f' took {time.perf_counter()-start:.2f}s'
                             )
                 inferences += 1
-
-            #  
             previous_frame_count = frame_count
         
         if barrier.broken:
@@ -638,7 +635,7 @@ def main(args):
     # Get the model
     logger.info(f'CUDA is available...{torch.cuda.is_available()}')
     torch.cuda.set_device(0) if torch.cuda.is_available() else \
-        warnings.warn('No Cuda Deviceswere found, CPU inference will be very slow')
+        warnings.warn('No Cuda Devices were found, CPU inference will be very slow')
     
     # Get the model ready for inference 
     model = prepare_model(logger, config_file, check_point_file, device=device, half_precision=half_precision)

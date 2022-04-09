@@ -110,8 +110,10 @@ after_run:
   warnings.warn("None of the inputs have requires_grad=True. Gradients will be None")
 [>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>] 55/55, 2.9 task/s, elapsed: 19s, ETA:     0s
 ```
- 
-*Download the, above described, best model to your local folder by navigating into the folder, right clock and download*. Rename the file simply as best_model.pth. copt it into *workspace/configs* folder. This will now be used for inference.
+
+The pytorch model files are stored in the folder *workspace/Video-Swin-Transformer/work_dirs/k400_swin_tiny_patch244_window877.py*. Note the .py in the folder name, this is by design. There is a .pth for each epoch of model training but the best model is updated with the name "best_top_1_acc_epoch_<number>.pth". The latest epoch model with that label is the best model for inference based on the performance on the validation dataset.
+
+*Download the, above described, best model to your local folder by navigating into the folder, right click and download*. Rename the file simply as best_model.pth. copt it into *workspace/configs* folder. This will now be used for inference.
         
 ### 2.5 Test on the cloud
 To test the model performance on the cloud open *bsl_test.py* and run all cells. This should list out the accuracy score and a confusion matrix.
@@ -155,6 +157,7 @@ git clone https://github.com/atox120/w251_fp.git
 cd w251_fp
 bash edge_start.sh
 ```
+*Copy the model(best_model.pth) into store/configs folder*
 
 ### 3.1 Inference of source_vide.mp4 on the edge
 The following section run inference on a video stream and generates a labeled video.

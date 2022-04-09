@@ -139,6 +139,54 @@ The previous section ran the inference on video clips from the test set. The fol
 Open a terminal in Jupyter lab and navigate to the scipts folder and run the following command.
 1. For 32 bit inference
 ```sh
+python3 inference_file.py
+```
+        
+2. For 16bit inference
+```sh
+python3 inference_file.py --half-precision
+```
+
+## 3. Inference on the edge device
+
+Open a terminal on a Jetson device and type the following commands
+```sh
+git clone https://github.com/atox120/w251_fp.git
+cd w251_fp
+bash edge_start.sh
+```
+
+### 3.1 Inference of source_vide.mp4 on the edge
+The following section run inference on a video stream and generates a labeled video.
+
+1. It sources the video from source_video.mp4 in the notebooks folder
+2. It loads the video as frames at the rate of 30FPS
+3. Performs inference on a set of 32 frames
+4. The labeled videos are produced at output/out_video.mp4
+5. A log of the inferences in created in the output folder with the name bsl_<timestamp>.log
+
+1. For 32 bit inference
+```sh
+python3 inference_file.py
+```
+        
+2. For 16bit inference
+```sh
+python3 inference_file.py --half-precision
+```
+
+### 3.3 Inference using the webcam
+The following section run inference on a video stream from webcam and generates a video
+
+1. It sources the video from webcam
+2. It loads the video as frames at the rate of 30FPS
+3. Performs inference on a set of 32 frames
+4. The labeled videos are produced at output/out_video.mp4
+5. A log of the inferences in created in the output folder with the name bsl_<timestamp>.log
+
+Use ctrl-c to break out of webcam mode. The out_video.mp4 will be created once the streaming is stopped using ctrl-c
+1. For 32 bit inference
+```sh
 python3 inference.py
 ```
         
@@ -146,21 +194,3 @@ python3 inference.py
 ```sh
 python3 inference.py --half-precision
 ```
-
-## 3. Inference on the edge device
-
-
-***The instructions are for building on a Jetson device.***
-Run the script and commands below. 
-```sh
-git clone https://github.com/atox120/w251_fp.git
-cd w251_fp
-bash edge_start.sh
-```
-
-## Training and Inference
-### Inference on tiny Kinetic400 data
-Navigate to the notebooks folder and open kinetics_tiny_inference.ipynb and run all cells. Note that the class labels for the dataset **do not match** the trained class labels. The accuracy will thus be near zero.
-
-### Training on tiny Kinetic400 data
-Navigate to the notebooks folder and open kinetics_tiny_train.ipynb and run all cells.

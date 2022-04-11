@@ -72,3 +72,5 @@ ipadd=$(wget -qO- https://ipecho.net/plain | grep "")
 echo "######"
 echo "Use this URL in your browser:"
 echo "${newout/hostname/"$ipadd"}"
+echo "or"
+echo "${newout/hostname/localhost}"
